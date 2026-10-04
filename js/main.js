@@ -54,7 +54,8 @@ const THEMES = ['auto', 'light', 'dark'];
 function applyTheme(t) {
   if (t === 'auto') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = t;
-  themeBtn.textContent = t[0].toUpperCase() + t.slice(1);
+  themeBtn.textContent = { auto: '◐', light: '☀', dark: '☾' }[t];
+  themeBtn.title = `Colour theme: ${t} (click to change)`;
   themeBtn.setAttribute('aria-label', `Colour theme: ${t}`);
   invalidateColors();
 }

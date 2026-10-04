@@ -4,7 +4,7 @@
 // linear readout trained by ridge regression maps fingerprints to classes.
 
 import { EchoStateNetwork } from './esn.js';
-import { ridgeSolve, matVec } from './linalg.js';
+import { ridgeSolve, matVec, solveRegularized } from './linalg.js';
 
 export class SequenceClassifier {
   constructor({
@@ -69,6 +69,64 @@ export class SequenceClassifier {
       Y[s * C + classes.indexOf(ex.label)] = 1;
     });
     this.W = ridgeSolve(X, S, F, Y, C, this.lambda);
+  }
+
+  // Leave-one-group-out check: for every group (e.g. one recording and its
+  // augmented copies) train without it and test on its original. Uses the
+  // dual form with one shared Gram matrix, so each fold is a tiny solve.
+  leaveOneOut(examples, classes, groupOf, isOriginal) {
+    const S = examples.length;
+    const F = this.featureLength;
+    const C = classes.length;
+    const X = examples.map((ex) => ex.features || this.features(ex.seq));
+    const K = new Float64Array(S * S);
+    for (let i = 0; i < S; i++) {
+      for (let j = 0; j <= i; j++) {
+        let v = 0;
+        const a = X[i];
+        const b = X[j];
+        for (let k = 0; k < F; k++) v += a[k] * b[k];
+        K[i * S + j] = v;
+        K[j * S + i] = v;
+      }
+    }
+    const groups = new Map();
+    examples.forEach((ex, i) => {
+      const g = groupOf(ex);
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(i);
+    });
+    let ok = 0;
+    let n = 0;
+    for (const members of groups.values()) {
+      const out = new Set(members);
+      const idx = [];
+      for (let i = 0; i < S; i++) if (!out.has(i)) idx.push(i);
+      const m = idx.length;
+      const Ks = new Float64Array(m * m);
+      const Y = new Float64Array(m * C);
+      for (let a = 0; a < m; a++) {
+        for (let b = 0; b < m; b++) Ks[a * m + b] = K[idx[a] * S + idx[b]];
+        Y[a * C + classes.indexOf(examples[idx[a]].label)] = 1;
+      }
+      const alpha = solveRegularized(Ks, m, Y, C, this.lambda * m);
+      for (const hIdx of members) {
+        if (!isOriginal(examples[hIdx])) continue;
+        let best = 0;
+        let bestScore = -Infinity;
+        for (let c = 0; c < C; c++) {
+          let sc = 0;
+          for (let a = 0; a < m; a++) sc += alpha[a * C + c] * K[hIdx * S + idx[a]];
+          if (sc > bestScore) {
+            bestScore = sc;
+            best = c;
+          }
+        }
+        n++;
+        if (classes[best] === examples[hIdx].label) ok++;
+      }
+    }
+    return { ok, n };
   }
 
   get trained() {

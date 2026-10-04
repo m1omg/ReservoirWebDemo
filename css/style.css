@@ -191,6 +191,9 @@ a {
 
 .theme-toggle {
   flex: none;
+  min-width: 38px;
+  font-size: 16px;
+  padding: 4px 8px;
 }
 
 /* ---------- Layout ---------- */
@@ -230,6 +233,10 @@ main {
 @media (max-width: 920px) {
   .demo {
     grid-template-columns: minmax(0, 1fr);
+  }
+  /* Demos you have to set up first show their controls on top. */
+  .demo.controls-first > :last-child {
+    order: -1;
   }
 }
 
@@ -738,7 +745,8 @@ canvas.draw {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   gap: 3px;
-  max-width: 260px;
+  width: 100%;
+  max-width: 240px;
   aspect-ratio: 1;
 }
 .token-grid div {
@@ -849,9 +857,14 @@ footer {
     display: none;
   }
   .app-header-inner {
-    gap: 8px;
+    gap: 6px;
+    padding: 8px 12px;
+  }
+  .tabs {
+    gap: 0;
   }
   .tab {
-    padding: 7px 9px;
+    padding: 7px 7px;
+    font-size: 14px;
   }
 }

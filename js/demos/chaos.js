@@ -430,9 +430,12 @@ export function mount(root) {
       ctx.setLineDash([]);
       ctx.textAlign = 'left';
       ctx.fillStyle = c.text;
-      const txt = `still accurate up to here: ${u.f(S.result.valid).toFixed(u.short === 't' ? 0 : 1)} ${u.name}`;
+      const v = u.f(S.result.valid).toFixed(u.short === 't' ? 0 : 1);
+      let txt = `still accurate up to here: ${v} ${u.name}`;
+      if (ctx.measureText(txt).width > W - left - right) txt = `accurate for ${v} ${u.short}`;
       const tw = ctx.measureText(txt).width;
-      const tx = vx + 4 + tw > W - right ? vx - 4 - tw : vx + 4;
+      let tx = vx + 4 + tw > W - right ? vx - 4 - tw : vx + 4;
+      tx = Math.max(left, Math.min(W - right - tw, tx));
       ctx.fillText(txt, tx, 12);
     }
     // Time ticks in Lyapunov times (or time units) after "now".

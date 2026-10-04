@@ -38,7 +38,22 @@ export function colors() {
     dark: (v('--surface') || '#fff').toLowerCase() === '#1a1a19',
   };
   cached.lut = divergingLut(cached.divNeg, cached.divMid, cached.divPos);
+  // Sequential single-hue ramp (blue) for magnitudes such as spectrograms:
+  // near-zero recedes into the surface, large values are the strongest blue.
+  const seq = cached.dark ? ['#1a1a19', '#104281', '#3987e5', '#cde2fb'] : ['#fcfcfb', '#b7d3f6', '#3987e5', '#0d366b'];
+  cached.seqLut = rampLut(seq.map(hexToRgb));
   return cached;
+}
+
+function rampLut(stops) {
+  const lut = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const x = (i / 255) * (stops.length - 1);
+    const k = Math.min(stops.length - 2, Math.floor(x));
+    const f = x - k;
+    for (let c = 0; c < 3; c++) lut[i * 3 + c] = stops[k][c] + (stops[k + 1][c] - stops[k][c]) * f;
+  }
+  return lut;
 }
 
 export function invalidateColors() {

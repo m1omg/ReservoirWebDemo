@@ -7,7 +7,9 @@
 
 import { spawn, execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { synthWord, SYNTH_WORDS } from '../helpers/synth-speech.js';
+import { Rng } from '../../js/core/rng.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -32,8 +34,35 @@ const server = spawn('python3', ['-m', 'http.server', String(port), '--bind', '1
 await new Promise((r) => setTimeout(r, 800));
 const base = `http://127.0.0.1:${port}/`;
 
+// A fake microphone that "says" synthetic words over and over.
+function writeWav(path) {
+  const sr = 16000;
+  const rng = new Rng(5);
+  const parts = [];
+  for (let k = 0; k < 8; k++) parts.push(synthWord(SYNTH_WORDS[k % SYNTH_WORDS.length], rng, sr));
+  const total = parts.reduce((a, p) => a + p.length, 0);
+  const buf = Buffer.alloc(44 + total * 2);
+  buf.write('RIFF', 0);
+  buf.writeUInt32LE(36 + total * 2, 4);
+  buf.write('WAVEfmt ', 8);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(sr, 24);
+  buf.writeUInt32LE(sr * 2, 28);
+  buf.writeUInt16LE(2, 32);
+  buf.writeUInt16LE(16, 34);
+  buf.write('data', 36);
+  buf.writeUInt32LE(total * 2, 40);
+  let o = 44;
+  for (const p of parts) for (const v of p) (buf.writeInt16LE(Math.max(-32767, Math.min(32767, Math.round(v * 32767))), o), (o += 2));
+  writeFileSync(path, buf);
+}
+const wav = join(outDir, 'fake-mic.wav');
+writeWav(wav);
+
 const launchOpts = {
-  args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
+  args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${wav}`, '--autoplay-policy=no-user-gesture-required'],
 };
 if (process.env.CHROMIUM_PATH) launchOpts.executablePath = process.env.CHROMIUM_PATH;
 const browser = await chromium.launch(launchOpts);
@@ -87,9 +116,16 @@ async function session({ width, height, scheme, tag }) {
   if (want('speech')) {
     await page.goto(base + '#speech');
     await page.waitForTimeout(500);
-    const start = page.locator('#view-speech button', { hasText: 'Start microphone' });
-    if (await start.count()) await start.first().click();
-    await page.waitForTimeout(2500);
+    await page.locator('#view-speech button', { hasText: 'Start microphone' }).first().click();
+    await page.locator('#view-speech button', { hasText: 'Stop' }).first().waitFor({ state: 'visible', timeout: 10000 });
+    // Arm recording for the first word and wait for the fake mic to say something.
+    await page.locator('#view-speech .word-row button', { hasText: 'Record' }).first().click();
+    try {
+      await page.waitForFunction(() => document.querySelectorAll('#view-speech .dots i.on').length >= 2, null, { timeout: 15000 });
+    } catch {
+      failures.push(`${tag}: speech demo never detected an utterance from the fake microphone`);
+    }
+    await page.waitForTimeout(500);
     await shot('speech');
   }
 
