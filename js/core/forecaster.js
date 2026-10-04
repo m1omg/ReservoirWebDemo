@@ -61,6 +61,15 @@ export class ReservoirForecaster {
     for (let i = 0; i < x.length; i++) x[i] += rng.gauss() * amount * 0.1;
   }
 
+  snapshot() {
+    return { x: Float64Array.from(this.esn.x), y: Float64Array.from(this.y) };
+  }
+
+  restore(s) {
+    this.esn.x.set(s.x);
+    this.y.set(s.y);
+  }
+
   get state() {
     return this.esn.x;
   }
