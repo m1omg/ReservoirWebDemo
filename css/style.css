@@ -95,6 +95,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -670,7 +674,7 @@ details.explain p:last-child {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 340px;
+  max-height: 420px;
   overflow-y: auto;
 }
 .class-item {
