@@ -4,7 +4,7 @@
   "description": "Interactive reservoir computing demos that run entirely in the browser.",
   "private": true,
   "type": "module",
-  "license": "GPL-3.0-or-later",
+  "license": "GPL-3.0-only",
   "scripts": {
     "start": "python3 -m http.server 8000 --bind 127.0.0.1",
     "test": "node --test \"tests/*.test.js\"",

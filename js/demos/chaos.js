@@ -101,15 +101,19 @@ export function mount(root) {
   });
   const perturbBtn = button('Perturb the dream', () => {
     if (!S.model) return;
-    S.model.perturb(S.rng, 1.2);
+    S.model.perturb(S.rng, SYSTEMS[S.system].kick);
+    dreamStatus.textContent = 'Kicked off course. Watch whether it finds its way back to the attractor.';
   });
-  const restartBtn = button('Restart dream', () => {
+  const restartBtn = button('Restart dream', () => restartDream());
+  const dreamStatus = h('p', { class: 'hint', 'aria-live': 'polite' });
+
+  function restartDream() {
     if (!S.model) return;
     // Rewind to the end of training and replay the (deterministic) forecast.
     S.model.restore(S.snapshot);
     S.result = forecast(S.model, S.data, SYSTEMS[S.system].dim, 0, S.train, S.horizon);
     startDream();
-  });
+  }
 
   const panel = h(
     'div',
@@ -132,6 +136,7 @@ export function mount(root) {
     h('h2', {}, 'Dreaming'),
     speed.el,
     h('div', { class: 'btn-row' }, perturbBtn, restartBtn),
+    dreamStatus,
   );
 
   const explain = h(
@@ -214,6 +219,7 @@ export function mount(root) {
     S.training = true;
     S.pending = false;
     trainBtn.disabled = true;
+    dreamStatus.textContent = '';
     loop.stop();
     const sys = SYSTEMS[S.system];
     const T = tl.value;
@@ -301,7 +307,8 @@ export function mount(root) {
     S.rasterNeurons = Array.from({ length: RASTER_ROWS }, (_, i) => Math.floor((i * N) / RASTER_ROWS));
     S.raster.fill(0);
     S.rasterHead = 0;
-    loop.start();
+    S.health = { n: 0, mean: 0, sq: 1, escapes: 0 };
+    if (S.visible) loop.start();
   }
 
   function pushDream(sys, y) {
@@ -330,8 +337,27 @@ export function mount(root) {
   function dreamStep() {
     const sys = SYSTEMS[S.system];
     const y = S.model.dream();
-    // Keep a runaway (rare, with extreme settings) from breaking the view.
-    for (let j = 0; j < y.length; j++) if (!Number.isFinite(y[j]) || Math.abs(y[j]) > 50) y[j] = Math.sign(y[j] || 1) * 50;
+    // The data is z-scored, so the real attractor lives within about ±3.
+    // Clip what is fed back so a runaway can't explode, and watch the dream's
+    // health: if it escapes or collapses to a point, say so and restart.
+    let escaped = false;
+    for (let j = 0; j < y.length; j++) {
+      if (!Number.isFinite(y[j])) y[j] = 0;
+      if (Math.abs(y[j]) > 4.5) {
+        y[j] = Math.sign(y[j]) * 4.5;
+        escaped = true;
+      }
+    }
+    const H = S.health;
+    H.n++;
+    H.mean += (y[0] - H.mean) / 200;
+    H.sq += (y[0] * y[0] - H.sq) / 200;
+    if (escaped) H.escapes++;
+    if (H.n > 400 && (H.escapes > 20 || H.sq - H.mean * H.mean < 0.03)) {
+      dreamStatus.textContent = H.escapes > 20 ? 'The dream escaped the attractor, so it was restarted. Some settings and systems make fragile models.' : 'The dream collapsed to a single point, so it was restarted. Some settings and systems make fragile models.';
+      restartDream();
+      return;
+    }
     pushDream(sys, y);
     const x = S.model.state;
     const col = S.rasterHead;
@@ -603,12 +629,14 @@ export function mount(root) {
   let started = false;
   return {
     show() {
+      S.visible = true;
       if (!started) {
         started = true;
         train();
-      } else if (S.model) loop.start();
+      } else if (S.model && !S.training) loop.start();
     },
     hide() {
+      S.visible = false;
       loop.stop();
     },
   };

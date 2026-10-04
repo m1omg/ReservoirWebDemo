@@ -82,7 +82,7 @@ export function mount(root) {
   const pauseBtn = button('Pause', () => {
     S.running = !S.running;
     pauseBtn.textContent = S.running ? 'Pause' : 'Resume';
-    if (S.running) loop.start();
+    if (S.running && S.visible) loop.start();
     else loop.stop();
   });
   const pokeBtn = button('Splash!', () => splash());
@@ -239,7 +239,7 @@ export function mount(root) {
     if (memory) await computeCurve(pond, weights, squared);
     S.training = false;
     if (S.pending) return train();
-    if (S.running) loop.start();
+    if (S.running && S.visible) loop.start();
   }
 
   // Memory curve measured on a fresh random signal.
@@ -500,12 +500,14 @@ export function mount(root) {
   let started = false;
   return {
     show() {
+      S.visible = true;
       if (!started) {
         started = true;
         train();
       } else if (S.running && !S.training) loop.start();
     },
     hide() {
+      S.visible = false;
       loop.stop();
     },
   };

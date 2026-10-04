@@ -55,10 +55,9 @@ export class ReservoirForecaster {
     return this.observe(Float64Array.from(this.y));
   }
 
+  // Knock the free-running prediction off course by random noise.
   perturb(rng, amount) {
     for (let j = 0; j < this.dim; j++) this.y[j] += rng.gauss() * amount;
-    const x = this.esn.x;
-    for (let i = 0; i < x.length; i++) x[i] += rng.gauss() * amount * 0.1;
   }
 
   snapshot() {

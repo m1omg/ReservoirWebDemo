@@ -82,6 +82,7 @@ export const SYSTEMS = {
     }),
     view: [0, 2, 1],
     preset: { size: 300, degree: 3, spectralRadius: 0.3, leak: 1, inputScaling: 0.3, biasScaling: 0.5, lambda: 1e-11, train: 4000 },
+    kick: 1.2,
   },
   rossler: {
     name: 'Rössler',
@@ -103,6 +104,7 @@ export const SYSTEMS = {
     }),
     view: [0, 1, 2],
     preset: { size: 300, degree: 3, spectralRadius: 0.3, leak: 1, inputScaling: 0.3, biasScaling: 0.5, lambda: 1e-11, train: 4000 },
+    kick: 0.5,
   },
   mackeyGlass: {
     name: 'Mackey–Glass',
@@ -114,6 +116,7 @@ export const SYSTEMS = {
     // 1-D series: shown as a delay embedding (x(t), x(t−6), x(t−12)).
     embedLag: 6,
     preset: { size: 300, degree: 3, spectralRadius: 0.9, leak: 0.5, inputScaling: 0.3, biasScaling: 0.5, lambda: 1e-11, train: 4000 },
+    kick: 0.3,
   },
 };
 
