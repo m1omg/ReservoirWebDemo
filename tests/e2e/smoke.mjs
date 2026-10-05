@@ -10,6 +10,8 @@ import { createRequire } from 'node:module';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { synthWord, SYNTH_WORDS } from '../helpers/synth-speech.js';
 import { Rng } from '../../js/core/rng.js';
+import en from '../../js/content/en.js';
+import sk from '../../js/content/sk.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -70,8 +72,34 @@ const browser = await chromium.launch(launchOpts);
 const failures = [];
 const want = (name) => !only || only.includes(name);
 
-async function session({ width, height, scheme, tag }) {
-  const ctx = await browser.newContext({ viewport: { width, height }, colorScheme: scheme, deviceScaleFactor: 1 });
+// Visible = rendered and not hidden by the reading-level CSS.
+const visible = (page, sel) => page.evaluate((q) => [...document.querySelectorAll(q)].some((el) => el.offsetParent !== null), sel);
+
+// Moves a slider away from its value, presses the demo's reset button and
+// checks the slider is back where it started.
+async function checkReset(page, view, L, tag) {
+  const range = page.locator(`#view-${view} input[type=range]`).first();
+  const before = await range.inputValue();
+  await range.evaluate((el) => {
+    el.value = el.max;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForTimeout(300);
+  await page.locator(`#view-${view} button`, { hasText: L.common.reset.replace('↺ ', '') }).first().click();
+  await page.waitForTimeout(300);
+  const after = await range.inputValue();
+  if (after !== before) failures.push(`${tag}: ${view} reset left the first slider at ${after} (expected ${before})`);
+  const note = await page.locator(`#view-${view} .panel-foot .hint`).first().textContent();
+  if (note !== L.common.resetDone) failures.push(`${tag}: ${view} reset note is "${note}"`);
+}
+
+// English words that must not appear in the Slovak demo pages.
+const ENGLISH_UI = /\b(Training|Neurons|Reset|Simple|Detailed|Draw|Record|Accuracy|Microphone|Leak rate|Spectral radius|Settings|Pause|Splash|Forecast|Readout|Dream)\b/;
+
+async function session({ width, height, scheme, tag, locale = 'en-US' }) {
+  const L = locale.startsWith('sk') ? sk : en;
+  const ctx = await browser.newContext({ viewport: { width, height }, colorScheme: scheme, deviceScaleFactor: 1, locale });
   await ctx.grantPermissions(['microphone'], { origin: base });
   const page = await ctx.newPage();
   const errors = [];
@@ -80,16 +108,47 @@ async function session({ width, height, scheme, tag }) {
   });
   page.on('pageerror', (e) => errors.push(String(e)));
   const shot = (name) => page.screenshot({ path: join(outDir, `${tag}-${name}.png`), fullPage: true });
+  const noEnglish = async (view) => {
+    if (L !== sk) return;
+    const text = await page.locator(`#view-${view}`).innerText();
+    const m = text.match(ENGLISH_UI);
+    if (m) failures.push(`${tag}: English word "${m[0]}" left in the Slovak ${view} page`);
+  };
 
   await page.goto(base + '#intro');
   await page.waitForTimeout(300);
-  if (want('intro')) await shot('intro');
+  const lang = await page.evaluate(() => document.documentElement.lang);
+  if (lang !== (L === sk ? 'sk' : 'en')) failures.push(`${tag}: page language is "${lang}"`);
+  const title = await page.title();
+  if (title !== L.meta.title) failures.push(`${tag}: title is "${title}"`);
+
+  if (want('intro')) {
+    // Simple is the default; Detailed is one click away and lands in the URL.
+    if (!(await visible(page, '#view-intro [data-level=simple]')) || (await visible(page, '#view-intro [data-level=detailed]'))) failures.push(`${tag}: intro does not open in Simple mode`);
+    await shot('intro');
+    await page.locator('.level-switch .seg', { hasText: L.common.level.detailed }).first().click();
+    if (!page.url().includes('explain=detailed')) failures.push(`${tag}: URL lacks explain=detailed after switching`);
+    if (!(await visible(page, '#view-intro [data-level=detailed]'))) failures.push(`${tag}: Detailed text not shown after switching`);
+    await page.reload();
+    await page.waitForTimeout(300);
+    if ((await page.evaluate(() => document.documentElement.dataset.explain)) !== 'detailed') failures.push(`${tag}: Detailed choice lost on reload`);
+    await shot('intro-detailed');
+    await page.locator('.level-switch .seg', { hasText: L.common.level.simple }).first().click();
+    const pressed = await page.evaluate(() => [...document.querySelectorAll('.level-switch .seg[aria-pressed=true]')].map((b) => b.dataset.value));
+    if (pressed.some((v) => v !== 'simple')) failures.push(`${tag}: level switches out of sync: ${pressed}`);
+  }
 
   if (want('chaos')) {
     await page.goto(base + '#chaos');
-    await page.waitForFunction(() => /ms|s$/.test(document.querySelector('#view-chaos .stat .value')?.textContent || ''), null, { timeout: 30000 });
+    await page.waitForFunction(() => /\d/.test(document.querySelector('#view-chaos .stat .value')?.textContent || ''), null, { timeout: 30000 });
     await page.waitForTimeout(4500);
+    if (L === sk) {
+      const valid = await page.locator('#view-chaos .stat .value').nth(1).textContent();
+      if (!/\d,\d/.test(valid)) failures.push(`${tag}: Slovak forecast stat lacks a decimal comma: "${valid}"`);
+    }
+    await noEnglish('chaos');
     await shot('chaos');
+    await checkReset(page, 'chaos', L, tag);
   }
 
   if (want('gestures')) {
@@ -109,31 +168,52 @@ async function session({ width, height, scheme, tag }) {
     await page.mouse.up();
     await page.waitForTimeout(1200);
     const verdict = await page.locator('#view-gestures .verdict').textContent();
-    if (!/circle/i.test(verdict)) failures.push(`${tag}: gesture circle recognised as "${verdict}"`);
+    if (!verdict.includes(L.gestures.names.circle)) failures.push(`${tag}: gesture circle recognised as "${verdict}"`);
+    await noEnglish('gestures');
     await shot('gestures');
+    await checkReset(page, 'gestures', L, tag);
   }
 
   if (want('speech')) {
     await page.goto(base + '#speech');
     await page.waitForTimeout(500);
-    await page.locator('#view-speech button', { hasText: 'Start microphone' }).first().click();
-    await page.locator('#view-speech button', { hasText: 'Stop' }).first().waitFor({ state: 'visible', timeout: 10000 });
+    await page.locator('#view-speech button', { hasText: L.speech.start }).first().click();
+    await page.locator('#view-speech button', { hasText: L.speech.stop }).first().waitFor({ state: 'visible', timeout: 10000 });
     // Arm recording for the first word and wait for the fake mic to say something.
-    await page.locator('#view-speech .word-row button', { hasText: 'Record' }).first().click();
+    await page.locator('#view-speech .word-row button', { hasText: L.speech.record }).first().click();
     try {
       await page.waitForFunction(() => document.querySelectorAll('#view-speech .dots i.on').length >= 2, null, { timeout: 15000 });
     } catch {
       failures.push(`${tag}: speech demo never detected an utterance from the fake microphone`);
     }
     await page.waitForTimeout(500);
+    await noEnglish('speech');
     await shot('speech');
+    await checkReset(page, 'speech', L, tag);
   }
 
   if (want('water')) {
     await page.goto(base + '#water');
     await page.waitForFunction(() => /%/.test(document.querySelector('#view-water .stat .value')?.textContent || ''), null, { timeout: 30000 });
     await page.waitForTimeout(3000);
+    await noEnglish('water');
     await shot('water');
+    await checkReset(page, 'water', L, tag);
+  }
+
+  // A shared link can force the reading level...
+  await page.goto(base + '?explain=detailed#water');
+  await page.waitForTimeout(500);
+  if (!(await visible(page, '#view-water .view-head [data-level=detailed]'))) failures.push(`${tag}: ?explain=detailed#water did not open in Detailed mode`);
+  // ...and the language.
+  if (L === sk) {
+    await page.goto(base + '?lang=en#intro');
+    await page.waitForTimeout(300);
+    if ((await page.evaluate(() => document.documentElement.lang)) !== 'en') failures.push(`${tag}: ?lang=en did not override the Slovak locale`);
+    await page.locator('#lang-switch button', { hasText: 'SK' }).click();
+    await page.waitForLoadState('load');
+    await page.waitForTimeout(300);
+    if ((await page.evaluate(() => document.documentElement.lang)) !== 'sk') failures.push(`${tag}: the SK switch did not switch back to Slovak`);
   }
 
   if (errors.length) failures.push(`${tag}: console errors:\n  ${errors.join('\n  ')}`);
@@ -144,6 +224,8 @@ try {
   await session({ width: 1360, height: 900, scheme: 'light', tag: 'desktop-light' });
   await session({ width: 1360, height: 900, scheme: 'dark', tag: 'desktop-dark' });
   await session({ width: 390, height: 844, scheme: 'light', tag: 'phone-light' });
+  await session({ width: 1360, height: 900, scheme: 'light', tag: 'sk-desktop-light', locale: 'sk-SK' });
+  await session({ width: 390, height: 844, scheme: 'dark', tag: 'sk-phone-dark', locale: 'sk-SK' });
 } catch (e) {
   failures.push(String(e.stack || e));
 } finally {

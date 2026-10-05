@@ -99,6 +99,12 @@
   display: none !important;
 }
 
+/* Reading level: only the active variant of each description is shown. */
+[data-explain='simple'] [data-level='detailed'],
+[data-explain='detailed'] [data-level='simple'] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -189,6 +195,74 @@ a {
   font-weight: 600;
 }
 
+/* Segmented controls: reading level and language. */
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.seg {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  padding: 4px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  min-height: 28px;
+}
+.seg:hover {
+  color: var(--text);
+}
+.seg[aria-pressed='true'] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), inset 0 0 0 1px var(--border);
+}
+.level-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+}
+.level-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+.lang-switch {
+  flex: none;
+}
+.lang-switch .seg {
+  padding: 4px 7px;
+  font-size: 12px;
+}
+.try {
+  margin-top: 8px !important;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text) !important;
+  font-size: 15px !important;
+}
+.panel-foot {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.panel-foot .hint {
+  margin: 0;
+}
+
 .theme-toggle {
   flex: none;
   min-width: 38px;
@@ -222,6 +296,9 @@ main {
   margin: 0;
   color: var(--text-2);
   font-size: 16px;
+}
+.view-head p + p {
+  margin-top: 8px;
 }
 
 .demo {
@@ -868,3 +945,25 @@ footer {
     font-size: 14px;
   }
 }
+
+/* Narrow phones: the tabs need the room more than the logo does. */
+@media (max-width: 430px) {
+  .brand {
+    display: none;
+  }
+  .app-header-inner {
+    padding: 8px 10px;
+  }
+  .tab {
+    padding: 6px 4px;
+    font-size: 13px;
+  }
+  .lang-switch .seg {
+    padding: 4px 5px;
+  }
+  .theme-toggle {
+    min-width: 32px;
+    padding: 4px 6px;
+  }
+}
+

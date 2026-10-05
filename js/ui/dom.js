@@ -182,3 +182,26 @@ export const storage = {
     }
   },
 };
+
+// Inline rich text from the content tables: **bold**, *italic* and
+// [text](url). Built as DOM nodes, never as HTML strings.
+export function rich(text) {
+  const out = [];
+  const re = /\*\*(.+?)\*\*|\*(.+?)\*|\[(.+?)\]\((.+?)\)/g;
+  let last = 0;
+  let m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[1] !== undefined) out.push(h('b', {}, m[1]));
+    else if (m[2] !== undefined) out.push(h('i', {}, m[2]));
+    else out.push(h('a', { href: m[4], ...(m[4].startsWith('#') ? {} : { rel: 'noopener' }) }, m[3]));
+    last = re.lastIndex;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+// One <p> per string.
+export function paras(list, attrs = {}) {
+  return (Array.isArray(list) ? list : [list]).map((s) => h('p', attrs, rich(s)));
+}

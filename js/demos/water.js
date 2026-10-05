@@ -4,7 +4,9 @@ import { Pond, sineSquareStream } from '../systems/wave.js';
 import { RidgeAccumulator, matVec } from '../core/linalg.js';
 import { FixedStepLoop, runChunked } from '../core/loop.js';
 import { Rng } from '../core/rng.js';
-import { h, slider, select, toggle, button, stat, legend, progressBar } from '../ui/dom.js';
+import { h, slider, select, toggle, button, stat, legend, progressBar, rich, paras } from '../ui/dom.js';
+import { t, tp, fmt, fmtInt, fmtTick, fmtPct } from '../i18n.js';
+import { levelSwitch, levels } from '../ui/explain.js';
 import { Canvas2D, colors, onThemeChange, yAxis, strokeSeries, withAlpha } from '../ui/canvas.js';
 
 const TRAIN_SAMPLES = 3000;
@@ -12,6 +14,7 @@ const WASHOUT = 100;
 const TRACE = 240;
 const WINDOW = 600;
 const MAX_DELAY = 30;
+const DEFAULTS = { camera: true, delay: 8, damping: 0.06, probes: 48, rate: 30 };
 
 export function mount(root) {
   const S = {
@@ -34,25 +37,25 @@ export function mount(root) {
   };
 
   // ---------- DOM ----------
-  const pondCanvas = h('canvas', { class: 'plot', 'aria-label': 'Simulated water surface with motors and probe points' });
-  const traceCanvas = h('canvas', { class: 'plot', 'aria-label': 'Input signal, correct answer and the readout over time' });
-  const curveCanvas = h('canvas', { class: 'plot', 'aria-label': 'How well the past can be recalled, by delay' });
+  const pondCanvas = h('canvas', { class: 'plot', 'aria-label': t('water.aria.pond') });
+  const traceCanvas = h('canvas', { class: 'plot', 'aria-label': t('water.aria.trace') });
+  const curveCanvas = h('canvas', { class: 'plot', 'aria-label': t('water.aria.curve') });
   const traceLegend = h('div');
-  const curveCard = h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, 'How long does the water remember?'), h('span', { class: 'sub' }, 'R² of recalling the input from d steps ago')), curveCanvas);
+  const curveCard = h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, t('water.curve')), h('span', { class: 'sub' }, t('water.curveSub'))), curveCanvas);
   const progress = progressBar();
   const status = h('p', { class: 'hint', 'aria-live': 'polite' });
 
-  const stAcc = stat('Accuracy, all samples');
-  const stSettled = stat('Accuracy after 1.5 periods');
-  const stTime = stat('Training time');
-  const stW = stat('Trained weights');
+  const stAcc = stat(t('water.stats.accuracy'));
+  const stSettled = stat(t('water.stats.settled'));
+  const stTime = stat(t('common.trainingTime'));
+  const stW = stat(t('common.trainedWeights'));
 
   const taskSel = select({
-    label: 'Task',
+    label: t('water.task'),
     value: S.task,
     options: [
-      ['shape', 'Tell a sine wave from a square wave'],
-      ['memory', 'Remember the past (recall the input from d steps ago)'],
+      ['shape', t('water.tasks.shape')],
+      ['memory', t('water.tasks.memory')],
     ],
     onChange: (v) => {
       S.task = v;
@@ -60,14 +63,14 @@ export function mount(root) {
       train();
     },
   });
-  const cam = toggle({ label: 'Nonlinear camera', hint: 'Sees brightness ≈ height², averaged over its exposure, as well as the height itself', checked: true, onChange: () => train() });
+  const cam = toggle({ label: t('water.camera'), hint: t('water.cameraHint'), checked: DEFAULTS.camera, onChange: () => train() });
   const delay = slider({
-    label: 'Delay d',
+    label: t('water.delay'),
     min: 0,
     max: MAX_DELAY,
     step: 1,
-    value: 8,
-    format: (v) => `${v} steps`,
+    value: DEFAULTS.delay,
+    format: (v) => tp('water.delayUnit', v),
     // Every delay already has its own trained readout; just switch to it.
     onInput: (v) => {
       if (!S.allW || S.task !== 'memory') return;
@@ -76,17 +79,28 @@ export function mount(root) {
       drawCurve();
     },
   });
-  const damp = slider({ label: 'Damping (how quickly ripples die)', min: 0.01, max: 0.2, step: 0.01, value: 0.06, format: (v) => v.toFixed(2), onChange: () => train() });
-  const probes = slider({ label: 'Probe points', min: 8, max: 96, step: 8, value: 48, onChange: () => train() });
-  const rate = slider({ label: 'Simulation speed', min: 5, max: 120, step: 5, value: 30, format: (v) => `${v} samples/s`, onInput: (v) => loop.setRate(v) });
-  const pauseBtn = button('Pause', () => {
+  const damp = slider({ label: t('water.damping'), min: 0.01, max: 0.2, step: 0.01, value: DEFAULTS.damping, format: (v) => fmt(v, 2), onChange: () => train() });
+  const probes = slider({ label: t('water.probes'), min: 8, max: 96, step: 8, value: DEFAULTS.probes, format: fmtInt, onChange: () => train() });
+  const rate = slider({ label: t('water.speed'), min: 5, max: 120, step: 5, value: DEFAULTS.rate, format: (v) => t('water.speedUnit', { v: fmtInt(v) }), onInput: (v) => loop.setRate(v) });
+  const pauseBtn = button(t('water.pause'), () => {
     S.running = !S.running;
-    pauseBtn.textContent = S.running ? 'Pause' : 'Resume';
+    pauseBtn.textContent = S.running ? t('water.pause') : t('water.resume');
     if (S.running && S.visible) loop.start();
     else loop.stop();
   });
-  const pokeBtn = button('Splash!', () => splash());
+  const pokeBtn = button(t('water.splash'), () => splash());
   const delayWrap = h('div', {}, delay.el);
+  const resetNote = h('p', { class: 'hint', 'aria-live': 'polite' });
+  const resetBtn = button(t('common.reset'), () => {
+    cam.checked = DEFAULTS.camera;
+    delay.value = DEFAULTS.delay;
+    damp.value = DEFAULTS.damping;
+    probes.value = DEFAULTS.probes;
+    rate.value = DEFAULTS.rate;
+    loop.setRate(DEFAULTS.rate);
+    train();
+    resetNote.textContent = t('common.resetDone');
+  }, 'small');
 
   const panel = h(
     'div',
@@ -96,30 +110,24 @@ export function mount(root) {
     delayWrap,
     progress.el,
     status,
-    h('h2', {}, 'The bucket'),
+    h('h2', {}, t('water.bucket')),
     damp.el,
     probes.el,
-    h('h2', {}, 'Live run'),
+    h('h2', {}, t('water.live')),
     rate.el,
     h('div', { class: 'btn-row' }, pauseBtn, pokeBtn),
+    h('div', { class: 'panel-foot' }, resetBtn, resetNote),
   );
 
-  const explain = h(
-    'details',
-    { class: 'explain' },
-    h('summary', {}, 'Why would water compute anything?'),
-    h('p', {}, 'Two “motors” on the left push the water up and down following the input signal. Ripples spread out, bounce off the walls and overlap. At any moment the surface holds a mixture of what the motors did over the last few moments, so it is a physical memory of the input’s recent history.'),
-    h('p', {}, 'The probe points are the camera. A linear readout, trained with one ridge regression, combines their readings into the answer. Nothing about the water is trained, and the water doesn’t “know” anything about sine or square waves.'),
-    h('p', {}, 'Ripples in this simulation obey a linear wave equation, so from the height alone a linear readout can only produce another linear filter of the input. That is fine for remembering the past, but a filtered sine is still a sine, so it can never settle on a steady “this is a square” answer. Turn the nonlinear camera off and the readout swings around wildly. A real camera looking at water through a light source sees brightness that depends nonlinearly on the surface, and it averages light over its exposure. That one nonlinearity is enough for the readout to tell the shapes apart.'),
-    h('p', {}, 'Fernando & Sojakka (2003) did this for real: a tank of water on an overhead projector, LEGO motors and a webcam. It solved XOR and told the spoken words “zero” and “one” apart.'),
-  );
+  const explain = h('details', { class: 'explain' }, h('summary', {}, t('water.explain.summary')), levels(paras(t('water.explain.simple')), paras(t('water.explain.detailed'))));
 
   root.append(
     h(
       'div',
       { class: 'view-head' },
-      h('h1', {}, 'A bucket of water'),
-      h('p', {}, 'Any system with rich enough dynamics can serve as the reservoir. Here a simulated pond does the computing, and the only thing trained is how to read 48 points on its surface.'),
+      h('h1', {}, t('water.title')),
+      levelSwitch(),
+      levels([h('p', {}, rich(t('water.lead.simple'))), h('p', { class: 'try' }, h('b', {}, t('common.tryIt')), ' ', rich(t('water.try')))], h('p', {}, rich(t('water.lead.detailed')))),
     ),
     h(
       'div',
@@ -128,8 +136,8 @@ export function mount(root) {
         'div',
         { class: 'stack' },
         h('div', { class: 'stats' }, stAcc.el, stSettled.el, stTime.el, stW.el),
-        h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, 'The pond'), h('span', { class: 'sub' }, 'motors on the left · probe points shown as rings')), pondCanvas),
-        h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, 'Live readout'), h('span', { class: 'sub' }, 'newest on the right')), traceLegend, traceCanvas),
+        h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, t('water.pond')), h('span', { class: 'sub' }, t('water.pondSub'))), pondCanvas),
+        h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, t('water.readout')), h('span', { class: 'sub' }, t('water.readoutSub'))), traceLegend, traceCanvas),
         curveCard,
         explain,
       ),
@@ -153,11 +161,11 @@ export function mount(root) {
     curveCard.hidden = S.task !== 'memory';
     stSettled.el.hidden = S.task !== 'shape';
     if (S.task === 'shape') {
-      traceLegend.replaceChildren(legend([['--s1', 'input signal'], ['--s3', 'right answer (up = square)'], ['--s2', 'readout']]));
-      stAcc.el.querySelector('.label').textContent = 'Accuracy, all samples';
+      traceLegend.replaceChildren(legend([['--s1', t('water.legend.input')], ['--s3', t('water.legend.answer')], ['--s2', t('water.legend.readout')]]));
+      stAcc.el.querySelector('.label').textContent = t('water.stats.accuracy');
     } else {
-      traceLegend.replaceChildren(legend([['--s3', 'input d steps ago (to recall)'], ['--s2', 'readout']]));
-      stAcc.el.querySelector('.label').textContent = 'Recall quality R²';
+      traceLegend.replaceChildren(legend([['--s3', t('water.legend.past')], ['--s2', t('water.legend.readout')]]));
+      stAcc.el.querySelector('.label').textContent = t('water.stats.recall');
     }
   }
 
@@ -185,7 +193,7 @@ export function mount(root) {
     // multi-output regression trains all 31 readouts (one per delay) at once.
     const acc = new RidgeAccumulator(F, memory ? MAX_DELAY + 1 : 1);
     const target1 = new Float64Array(1);
-    status.textContent = 'Making waves…';
+    status.textContent = t('water.status.making');
     const t0 = performance.now();
     await runChunked(
       TRAIN_SAMPLES,
@@ -231,11 +239,11 @@ export function mount(root) {
     S.lastLabel = -1;
     S.settledOk = 0;
     S.settledN = 0;
-    stTime.set(`${Math.round(ms)}`, 'ms');
-    stW.set(String(F), `(${pond.probes.length} probes${squared ? ' × 2' : ''} + bias)`);
+    stTime.set(fmtInt(ms), t('common.ms'));
+    stW.set(fmtInt(F), t('water.stats.weights', { p: fmtInt(pond.probes.length), x: squared ? ' × 2' : '' }));
     stAcc.set('…');
     stSettled.set('…');
-    status.textContent = `${TRAIN_SAMPLES.toLocaleString()} input samples sent through ${(pond.w * pond.h).toLocaleString()} cells of water, readout solved in ${Math.round(ms)} ms. Now testing on a fresh signal.`;
+    status.textContent = t('water.status.trained', { samples: fmtInt(TRAIN_SAMPLES), cells: fmtInt(pond.w * pond.h), ms: fmtInt(ms) });
     if (memory) await computeCurve(pond, weights, squared);
     S.training = false;
     if (S.pending) return train();
@@ -319,7 +327,7 @@ export function mount(root) {
         se += (y - t) ** 2;
         sv += t * t;
       }
-      stAcc.set(Math.max(0, 1 - se / sv).toFixed(2), `for d = ${delay.value}`);
+      stAcc.set(fmt(Math.max(0, 1 - se / sv), 2), t('water.stats.forD', { d: delay.value }));
     } else {
       let ok = 0;
       let sOk = 0;
@@ -331,8 +339,8 @@ export function mount(root) {
           sOk += c;
         }
       }
-      stAcc.set(`${((ok / S.win.length) * 100).toFixed(1)}%`);
-      stSettled.set(sN ? `${((sOk / sN) * 100).toFixed(1)}%` : '…');
+      stAcc.set(fmtPct(ok / S.win.length));
+      stSettled.set(sN ? fmtPct(sOk / sN) : '…');
     }
   }
 
@@ -424,7 +432,7 @@ export function mount(root) {
     ctx.fillStyle = c.text;
     ctx.font = '600 12px system-ui, sans-serif';
     ctx.textAlign = 'left';
-    ctx.fillText('motors', (p.motors[0].x + 0.5) * sx - 22, (p.motors[0].y + 0.5) * sy - 14);
+    ctx.fillText(t('water.motors'), (p.motors[0].x + 0.5) * sx - 22, (p.motors[0].y + 0.5) * sy - 14);
   }
 
   function drawTrace() {
@@ -437,7 +445,7 @@ export function mount(root) {
     const memory = S.task === 'memory';
     const min = memory ? -1.4 : -1.2;
     const max = memory ? 1.4 : 1.6;
-    const toY = yAxis(ctx, { x: left, y: 6, w: W - left - 6, h: H - 12, min, max, ticks: memory ? [-1, 0, 1] : [-1, 0, 0.5, 1], format: (v) => v, c });
+    const toY = yAxis(ctx, { x: left, y: 6, w: W - left - 6, h: H - 12, min, max, ticks: memory ? [-1, 0, 1] : [-1, 0, 0.5, 1], format: fmtTick, c });
     const n = tr.n;
     const toX = (i) => left + ((TRACE - n + i) / (TRACE - 1)) * (W - left - 6);
     const at = (arr) => (i) => arr[(tr.head - n + i + TRACE) % TRACE];
@@ -467,7 +475,7 @@ export function mount(root) {
     if (!S.curve) return;
     const left = 30;
     const bottom = 20;
-    const toY = yAxis(ctx, { x: left, y: 6, w: W - left - 6, h: H - bottom - 6, min: 0, max: 1, ticks: [0, 0.5, 1], format: (v) => v, c });
+    const toY = yAxis(ctx, { x: left, y: 6, w: W - left - 6, h: H - bottom - 6, min: 0, max: 1, ticks: [0, 0.5, 1], format: fmtTick, c });
     const n = S.curve.length;
     const band = (W - left - 6) / n;
     const bw = Math.min(24, band - 2);
