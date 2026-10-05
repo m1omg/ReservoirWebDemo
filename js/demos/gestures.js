@@ -189,10 +189,13 @@ export function mount(root) {
     const t0 = performance.now();
     status.textContent = t('gestures.status.training');
     // Synthetic examples for all built-ins (cached; features computed once per reservoir).
-    if (!S.synth || features) {
+    // Cached features belong to one reservoir; recompute them for a new one
+    // (e.g. when the reservoir was rebuilt while a previous run was busy).
+    if (!S.synth || features || S.synthFor !== clf) {
       const all = makeDataset(BUILTIN, SYNTH_PER_CLASS, 1);
       await runChunked(all.length, (i) => (all[i].features = clf.features(all[i].seq)), { onProgress: (p) => progress.set(p * 0.6) });
       S.synth = all;
+      S.synthFor = clf;
       S.test = makeDataset(BUILTIN, TEST_PER_CLASS, 999, { prefixes: false });
     }
     const classes = activeClasses();

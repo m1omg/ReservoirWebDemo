@@ -945,3 +945,25 @@ footer {
     font-size: 14px;
   }
 }
+
+/* Narrow phones: the tabs need the room more than the logo does. */
+@media (max-width: 430px) {
+  .brand {
+    display: none;
+  }
+  .app-header-inner {
+    padding: 8px 10px;
+  }
+  .tab {
+    padding: 6px 4px;
+    font-size: 13px;
+  }
+  .lang-switch .seg {
+    padding: 4px 5px;
+  }
+  .theme-toggle {
+    min-width: 32px;
+    padding: 4px 6px;
+  }
+}
+

@@ -34,7 +34,28 @@ physical systems have been used as reservoirs.
 | **A bucket of water** | A simulated pond is the reservoir. Ripples read at 48 points are enough to tell a sine wave from a square wave and to remember past inputs. | A trained network does the processing | Physics does the processing; only the 97 readout weights are trained. |
 
 Every demo lets you change the reservoir's settings (size, spectral radius, leak
-rate, input scaling, regularisation) and see what happens.
+rate, input scaling, regularisation) and see what happens. **↺ Reset settings**
+puts them back to the defaults.
+
+## Simple or detailed, English or Slovak
+
+Every description comes in two versions: **Simple**, a plain-language "explain
+like I'm five", and **Detailed**, the technical one. Switch between them right
+under each title. The page remembers your choice.
+
+The whole app is also available in **Slovak**. It opens in Slovak automatically
+when your browser's preferred language is Slovak, and the **EN | SK** switch in
+the header changes it at any time.
+
+Both choices can be set in a link, which is handy for sharing:
+
+| Link | Opens |
+|---|---|
+| `…/ReservoirWebDemo/?explain=simple` | Simple explanations (the default) |
+| `…/ReservoirWebDemo/?explain=detailed` | Technical explanations |
+| `…/ReservoirWebDemo/?lang=sk` | Slovak |
+| `…/ReservoirWebDemo/?lang=en` | English |
+| `…/ReservoirWebDemo/?lang=sk&explain=detailed#chaos` | Slovak, Detailed, straight into the chaos demo |
 
 ## Running it
 
@@ -83,6 +104,9 @@ demo has a button to clear them.
 - `js/audio/`: FFT and mel filterbank, voice activity detection, and the
   AudioWorklet that delivers microphone samples.
 - `js/demos/`: one file per demo.
+- `js/content/en.js`, `js/content/sk.js`: every piece of on-screen text in both
+  languages and both reading levels. Adding a language means adding one more
+  table; `js/i18n.js` handles lookup, plurals and number formatting.
 - **Refresh-rate independent:** every animation advances a fixed number of
   simulation steps per second of real time (`js/core/loop.js`), so a 60 Hz
   laptop and a 240 Hz monitor run at exactly the same speed. A test checks this

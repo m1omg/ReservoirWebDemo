@@ -49,8 +49,8 @@ function diagram() {
     <text x="430" y="212" text-anchor="middle" font-size="14" font-weight="600" fill="var(--text)">${d('readout')}</text>
     <text x="430" y="230" text-anchor="middle" font-size="12" fill="var(--text-2)">${d('readoutSub1')}</text>
     <text x="430" y="246" text-anchor="middle" font-size="12" fill="var(--text-2)">${d('readoutSub2')}</text>
-    <line x1="440" y1="150" x2="480" y2="150" stroke="var(--text-2)" stroke-width="1.5" marker-end="url(#arr)" />
-    <text x="495" y="155" text-anchor="middle" font-size="13" fill="var(--text-2)">${d('out')}</text>
+    <line x1="440" y1="150" x2="468" y2="150" stroke="var(--text-2)" stroke-width="1.5" marker-end="url(#arr)" />
+    <text x="474" y="155" text-anchor="start" font-size="13" fill="var(--text-2)">${d('out')}</text>
   </svg>`;
   return wrap.firstElementChild;
 }

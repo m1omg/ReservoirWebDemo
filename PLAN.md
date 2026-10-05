@@ -171,3 +171,160 @@ README.md, .nojekyll
   - also run the loop with a simulated frame rate and confirm simulation speed doesn't
     change.
 - Run `run.sh` once to confirm it serves the app.
+
+---
+
+# Follow-up: ELI5 explanations, Simple/Detailed switch (+ URL option), Reset settings buttons, Slovak translation
+
+## Context
+The Reservoir Computing Playground (PR #1) has been merged into `main`. The user wants:
+1. A plain-language **ELI5 ("Simple")** version of every description, next to the current
+   technical text ("Detailed").
+2. A **Simple / Detailed switch** in the descriptions to flip between them. **Simple is the
+   default** for first-time visitors (user's choice), and the last choice is remembered.
+3. A **URL option** for the same choice, so a shared link can open in Simple or Detailed:
+   `…/?explain=simple#chaos` or `…/?explain=detailed`.
+4. A **"Reset settings" button for each simulation**.
+5. A **natural-sounding Slovak translation** of the whole app. It opens automatically when the
+   browser's preferred language is Slovak.
+6. The simulations themselves stay exactly as they are: no changes to the models, defaults,
+   tuning or visuals.
+
+## Branch
+PR #1 is merged, so restart the designated branch from the latest `main` and open a **new** PR:
+`git fetch origin main && git checkout -B ccr-9e9978e2-j5ywp6 origin/main`. The local branch
+only holds already-merged history, so a `--force-with-lease` push is fine.
+
+## Design
+
+### Reading level (new `js/ui/explain.js`)
+- The state lives on `<html data-explain="simple|detailed">`. Text exists in both versions,
+  wrapped in `data-level="simple"` / `data-level="detailed"`, and CSS hides the inactive one:
+  `[data-explain='simple'] [data-level='detailed'], [data-explain='detailed'] [data-level='simple'] { display: none }`.
+- Which level applies: URL `?explain=` first, then the saved choice (`localStorage`
+  `rc-explain`, inside try/catch), then the default `simple`.
+- An inline script in `index.html` `<head>` (next to the existing theme script) applies the
+  level before first paint, so there's no flash of the wrong text.
+- `levelSwitch()`: a small segmented control `Simple | Detailed` (two buttons with
+  `aria-pressed`, keyboard-focusable). Every copy of it stays in sync. Clicking one sets
+  `data-explain`, saves the choice, and updates the address bar's `?explain=` with
+  `history.replaceState`, keeping the `#demo` hash. Copying the address bar therefore shares
+  the current mode.
+- Helper `levels(simpleChildren, detailedChildren)` returns the two wrapped variants, for use in
+  the demo modules.
+- Where the switch appears: the intro hero, and each demo's `view-head`, right under the title
+  and above the description. Each demo's "What am I looking at?" `<details>` follows the same
+  global setting.
+
+### What gets a Simple version
+- **Intro** (`index.html`):
+  - the hero paragraphs;
+  - each demo card's description, plus the "Usually / Here" lines in plain words;
+  - "Why does a random network work?": a crowd/pond analogy, with the four settings explained in
+    everyday terms;
+  - "Where it's weaker".
+  The diagram, headings and Further reading are shared.
+- **Each demo** (`js/demos/{chaos,gestures,speech,water}.js`):
+  - the `view-head` paragraph, plus a short "Try it: …" line in Simple mode;
+  - the explainer's paragraphs.
+  The current text becomes the Detailed variant, unchanged. Speech's privacy paragraph
+  appears in both. Control labels, stats and charts are unchanged.
+- Simple-mode wording: short sentences, no jargon, everyday analogies (pebbles and ripples,
+  weather forecasts, a crowd with memories, fingerprints). It must stay factually correct and
+  never invent numbers; any figures must match the Detailed text.
+
+### Reset settings (one button per demo: `↺ Reset settings`, small, at the end of the settings card)
+- Pull each demo's initial control values into one `DEFAULTS` object. The slider/toggle
+  constructors and the reset both use it, so the two can't drift apart.
+- Reset sets every control through the existing `slider.value` / `toggle.checked` setters,
+  then runs the demo's existing retrain path **once**:
+  - **Chaos**: `applyPreset()` for the currently selected system, squared features on, linear
+    comparison on, dream speed 120 (`S.dreamRate`), reservoir seed back to 1, then `train()`.
+    The chosen system stays selected.
+  - **Gestures**: neurons 200, spectral radius 0.9, leak 0.3, then `rebuild()`. Taught gestures
+    are kept; the existing "Reset to built-in gestures" button handles those.
+  - **Speech**: sensitivity 12 dB (also applied to a live VAD), neurons 300, leak 0.25, then
+    `scheduleTrain(0, true)`. Recordings are kept; "Forget all recordings" handles those.
+  - **Water**: nonlinear camera on, delay 8, damping 0.06, probes 48, speed 30 (also
+    `loop.setRate`), then `train()`. The selected task stays.
+- After a reset, a status line confirms what happened.
+
+### Slovak translation (new `js/i18n.js` + `js/content/en.js`, `js/content/sk.js`)
+- **Which language opens:**
+  1. URL `?lang=sk|en`, the same kind of shareable option as `?explain=`; both combine with
+     `#demo`;
+  2. otherwise the saved choice (`rc-lang`);
+  3. otherwise **Slovak if the browser's first preferred language starting with `sk`
+     appears in `navigator.languages`**;
+  4. otherwise English.
+
+  The inline head script sets `<html lang>` before the app loads.
+- **Switch:** a compact `EN | SK` control in the header next to the theme button. Switching
+  saves the choice, updates `?lang=` and reloads the page. That's the simplest reliable way
+  to rebuild every demo's text. Taught gestures and saved recordings survive in storage.
+- **`t(key, params)`** looks strings up in the active content table, falls back to English for
+  any missing key, and interpolates `{name}` placeholders.
+- **Number format:** a `fmt(n, digits)` helper based on `Intl.NumberFormat`. Displayed numbers
+  in Slovak use a decimal comma and a space as the thousands separator (8,2 · 3 899).
+  Computations are untouched.
+- **What gets translated:** all user-visible text.
+  - The intro page, in both Simple and Detailed versions. The intro body moves from static
+    HTML into a small renderer (`js/intro.js`) fed by the content tables, so it isn't
+    duplicated four times in HTML.
+  - Header, footer, page title and meta description.
+  - Every demo's title, descriptions, explainers, control labels, hints, buttons, stats,
+    legends, status and warning messages, aria-labels, tooltip text, and text drawn on
+    canvases (axis and unit labels such as "training ends" / "koniec trénovania", and
+    LT → LČ for Ljapunovove časy).
+  - Gesture names (kruh, trojuholník, štvorec, fajka ✓, cikcak, špirála, hviezda, vlnovka,
+    krížik ✕).
+- **Speech in Slovak:** the default words become **hore / dole / vľavo / vpravo**. The voice
+  grid accepts both these and the English words, so saved English words still steer it.
+- **Style:**
+  - Natural, conversational Slovak with correct diacritics, informal "ty" in instructions,
+    and standard technical terms: hrebeňová regresia, spektrálny polomer, atraktor,
+    Ljapunovov čas, spektrogram, neurón, škálovanie vstupu, miera úniku (leak).
+  - "Reservoir computing" becomes "rezervoárové počítanie (reservoir computing)" on first
+    mention. There's no established Slovak term.
+  - The Simple Slovak versions use the same everyday analogies as English, written natively
+    rather than translated word for word.
+- `README.md` gets a short note on the language and explanation options (the README itself
+  stays in English).
+
+### Files
+- New: `js/ui/explain.js`, `js/i18n.js`, `js/content/en.js`, `js/content/sk.js`, `js/intro.js`.
+- Edit:
+  - `index.html`: the inline head script handles theme, explain level and language, and the
+    intro body becomes a mount point;
+  - `js/main.js`: render the intro, the header language switch and translated tab names; keep
+    `?explain`/`?lang` intact on hash navigation;
+  - `css/style.css`: visibility rules, `.level-switch` and `.try` styles;
+  - the four `js/demos/*.js`: description variants, switch, DEFAULTS, reset button;
+  - `README.md`: mention the switch, the URL option and reset;
+  - `tests/e2e/smoke.mjs`: new checks;
+  - `PLAN.md`: append this follow-up plan as a new section.
+- Reuse the existing `h`, `button`, `storage` helpers in `js/ui/dom.js` and each demo's
+  current retrain functions. No simulation code (`js/core`, `js/systems`, `js/audio`)
+  changes.
+
+## Verification
+- `npm test`: all 29 existing tests still pass, which shows the simulations are untouched.
+- Extend `tests/e2e/smoke.mjs`, running in Chromium in all three sessions:
+  - a fresh visit shows the Simple text (Detailed hidden). Clicking "Detailed" swaps the
+    text, every switch on the page follows, and the URL gains `?explain=detailed`.
+  - `?explain=detailed#water` opens the water demo in Detailed mode.
+  - the choice survives a reload.
+  - a context with `locale: 'sk-SK'` opens in Slovak: `<html lang="sk">`, Slovak title and tab
+    names, Slovak gesture name for a drawn circle ("kruh"), decimal commas in stats.
+  - `?lang=en` overrides the Slovak locale, and the EN/SK switch flips the language.
+  - no English leftovers in Slovak mode: scan the page text for a list of common English UI
+    words.
+  - every demo runs without console errors in Slovak.
+  - per demo: change a control (set a slider through the page), click Reset settings, and
+    check the read-outs return to the defaults with no console errors.
+- Review screenshots of the intro and one demo in Simple and Detailed, desktop and 390 px
+  phone, light and dark. Check the switch fits on phone width and nothing overlaps. Also
+  review Slovak screenshots: longer Slovak words must not overflow buttons, tabs or stat
+  tiles, and the header must still fit at 390 px with the EN/SK switch.
+- Commit, push to `ccr-9e9978e2-j5ywp6`, open a new PR to `main`, and tell the user the
+  Pages site updates once it's merged.
