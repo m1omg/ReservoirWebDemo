@@ -4,7 +4,9 @@ import { SYSTEMS, zscore } from '../systems/chaos.js';
 import { ReservoirForecaster, LinearForecaster, forecast } from '../core/forecaster.js';
 import { FixedStepLoop } from '../core/loop.js';
 import { Rng } from '../core/rng.js';
-import { h, slider, select, toggle, button, stat, legend, progressBar } from '../ui/dom.js';
+import { h, slider, select, toggle, button, stat, legend, progressBar, rich, paras } from '../ui/dom.js';
+import { t, tp, fmt, fmtInt, fmtTick } from '../i18n.js';
+import { levelSwitch, levels } from '../ui/explain.js';
 import { Canvas2D, colors, onThemeChange, yAxis, strokeSeries, drawHeatmap, makeCamera, project, orbitControls, withAlpha } from '../ui/canvas.js';
 
 const TICKS = 240; // simulation ticks per second (independent of display rate)
@@ -14,6 +16,8 @@ const DATA_SEED = 2024;
 const RASTER_COLS = 240;
 const RASTER_ROWS = 48;
 const TRAIL = 2400;
+// Settings that aren't part of a system's preset (see SYSTEMS[*].preset).
+const DEFAULTS = { squared: true, compare: true, dreamRate: 120, seed: 1 };
 
 export function mount(root) {
   const S = {
@@ -49,21 +53,21 @@ export function mount(root) {
   const cam = makeCamera(0.7, 0.3);
 
   // ---------- DOM ----------
-  const forecastCanvas = h('canvas', { class: 'plot', 'aria-label': 'Forecast compared with the true trajectory' });
+  const forecastCanvas = h('canvas', { class: 'plot', 'aria-label': t('chaos.aria.forecast') });
   const tooltip = h('div', { class: 'tooltip', hidden: true });
   const legendBox = h('div');
-  const attractorCanvas = h('canvas', { class: 'plot', 'aria-label': 'Three-dimensional view of the attractor; drag to rotate' });
-  const rasterCanvas = h('canvas', { class: 'plot', 'aria-label': 'Activity of reservoir neurons over time' });
+  const attractorCanvas = h('canvas', { class: 'plot', 'aria-label': t('chaos.aria.attractor') });
+  const rasterCanvas = h('canvas', { class: 'plot', 'aria-label': t('chaos.aria.raster') });
   const progress = progressBar();
   const status = h('p', { class: 'hint', 'aria-live': 'polite' }, '');
 
-  const stTrain = stat('Training time');
-  const stValid = stat('Valid forecast');
-  const stLinear = stat('Linear model, no reservoir');
-  const stFeat = stat('Trained weights');
+  const stTrain = stat(t('common.trainingTime'));
+  const stValid = stat(t('chaos.stats.valid'));
+  const stLinear = stat(t('chaos.stats.linear'));
+  const stFeat = stat(t('common.trainedWeights'));
 
   const sysSelect = select({
-    label: 'Chaotic system',
+    label: t('chaos.controls.system'),
     value: S.system,
     options: Object.entries(SYSTEMS).map(([k, v]) => [k, v.name]),
     onChange: (v) => {
@@ -75,37 +79,39 @@ export function mount(root) {
   });
   const sysDesc = h('p', { class: 'hint' });
 
-  const fmt = (d) => (v) => Number(v).toFixed(d);
-  const sz = slider({ label: 'Neurons', min: 50, max: 800, step: 50, value: 300, onChange: () => train() });
-  const sr = slider({ label: 'Spectral radius (memory / echo)', min: 0.05, max: 1.6, step: 0.05, value: 0.3, format: fmt(2), onChange: () => train() });
-  const lk = slider({ label: 'Leak rate', min: 0.05, max: 1, step: 0.05, value: 1, format: fmt(2), onChange: () => train() });
-  const ins = slider({ label: 'Input scaling', min: 0.05, max: 2, step: 0.05, value: 0.3, format: fmt(2), onChange: () => train() });
-  const lam = slider({ label: 'Ridge regularisation λ', min: 1e-14, max: 1e-2, log: true, value: 1e-11, format: (v) => v.toExponential(0), onChange: () => train() });
-  const tl = slider({ label: 'Training steps', min: 500, max: 10000, step: 500, value: 4000, onChange: () => train() });
-  const sq = toggle({ label: 'Squared readout features', hint: 'Lets the linear readout see x² for half the neurons', checked: true, onChange: () => train() });
-  const cmp = toggle({ label: 'Compare with linear model', hint: 'Same training data and same ridge regression, but with no reservoir', checked: true, onChange: () => train() });
+  const f2 = (v) => fmt(v, 2);
+  const sz = slider({ label: t('common.neurons'), min: 50, max: 800, step: 50, value: 300, format: fmtInt, onChange: () => train() });
+  const sr = slider({ label: t('chaos.controls.spectral'), min: 0.05, max: 1.6, step: 0.05, value: 0.3, format: f2, onChange: () => train() });
+  const lk = slider({ label: t('common.leak'), min: 0.05, max: 1, step: 0.05, value: 1, format: f2, onChange: () => train() });
+  const ins = slider({ label: t('chaos.controls.input'), min: 0.05, max: 2, step: 0.05, value: 0.3, format: f2, onChange: () => train() });
+  const lam = slider({ label: t('chaos.controls.lambda'), min: 1e-14, max: 1e-2, log: true, value: 1e-11, format: (v) => v.toExponential(0), onChange: () => train() });
+  const tl = slider({ label: t('chaos.controls.steps'), min: 500, max: 10000, step: 500, value: 4000, format: fmtInt, onChange: () => train() });
+  const sq = toggle({ label: t('chaos.controls.squared'), hint: t('chaos.controls.squaredHint'), checked: DEFAULTS.squared, onChange: () => train() });
+  const cmp = toggle({ label: t('chaos.controls.compare'), hint: t('chaos.controls.compareHint'), checked: DEFAULTS.compare, onChange: () => train() });
   const speed = slider({
-    label: 'Dream speed',
+    label: t('chaos.controls.speed'),
     min: 10,
     max: 600,
     step: 10,
     value: S.dreamRate,
-    format: (v) => `${v} steps/s`,
+    format: (v) => t('chaos.controls.speedUnit', { v: fmtInt(v) }),
     onInput: (v) => (S.dreamRate = v),
   });
 
-  const trainBtn = button('Train & forecast', () => train(), 'primary');
-  const newBtn = button('New random reservoir', () => {
+  const trainBtn = button(t('chaos.controls.train'), () => train(), 'primary');
+  const newBtn = button(t('chaos.controls.newReservoir'), () => {
     S.seed++;
     train();
   });
-  const perturbBtn = button('Perturb the dream', () => {
+  const perturbBtn = button(t('chaos.controls.perturb'), () => {
     if (!S.model) return;
     S.model.perturb(S.rng, SYSTEMS[S.system].kick);
-    dreamStatus.textContent = 'Kicked off course. Watch whether it finds its way back to the attractor.';
+    dreamStatus.textContent = t('chaos.status.kicked');
   });
-  const restartBtn = button('Restart dream', () => restartDream());
+  const restartBtn = button(t('chaos.controls.restart'), () => restartDream());
   const dreamStatus = h('p', { class: 'hint', 'aria-live': 'polite' });
+  const resetNote = h('p', { class: 'hint', 'aria-live': 'polite' });
+  const resetBtn = button(t('common.reset'), () => resetSettings(), 'small');
 
   function restartDream() {
     if (!S.model) return;
@@ -113,6 +119,19 @@ export function mount(root) {
     S.model.restore(S.snapshot);
     S.result = forecast(S.model, S.data, SYSTEMS[S.system].dim, 0, S.train, S.horizon);
     startDream();
+  }
+
+  // Back to the defaults for the selected system (the system itself stays).
+  function resetSettings() {
+    applyPreset();
+    sq.checked = DEFAULTS.squared;
+    cmp.checked = DEFAULTS.compare;
+    speed.value = DEFAULTS.dreamRate;
+    S.dreamRate = DEFAULTS.dreamRate;
+    S.seed = DEFAULTS.seed;
+    describe();
+    train();
+    resetNote.textContent = t('common.resetDone');
   }
 
   const panel = h(
@@ -123,38 +142,32 @@ export function mount(root) {
     h('div', { class: 'btn-row' }, trainBtn, newBtn),
     progress.el,
     status,
-    h('h2', {}, 'Reservoir'),
+    h('h2', {}, t('common.reservoir')),
     sz.el,
     sr.el,
     lk.el,
     ins.el,
-    h('h2', {}, 'Readout (the only trained part)'),
+    h('h2', {}, t('chaos.controls.readout')),
     lam.el,
     tl.el,
     sq.el,
     cmp.el,
-    h('h2', {}, 'Dreaming'),
+    h('h2', {}, t('chaos.controls.dreaming')),
     speed.el,
     h('div', { class: 'btn-row' }, perturbBtn, restartBtn),
     dreamStatus,
+    h('div', { class: 'panel-foot' }, resetBtn, resetNote),
   );
 
-  const explain = h(
-    'details',
-    { class: 'explain' },
-    h('summary', {}, 'What am I looking at?'),
-    h('p', {}, 'The reservoir is a network of a few hundred randomly connected neurons with fixed weights. During training it is fed the true trajectory of a chaotic system, and a ', h('b', {}, 'single ridge regression'), ' learns how to read the next point from the neurons’ states. That is the whole training process. There is no backpropagation and there are no epochs.'),
-    h('p', {}, 'Then the input is disconnected and each prediction is fed back in as the next input. The network now runs on its own and keeps generating the future. Chaos makes small errors grow exponentially. A ', h('b', {}, 'Lyapunov time'), ' is how long an error takes to grow e-fold (≈2.7×). Weather forecasts lose accuracy after a few of them, so predicting about 8 Lyapunov times ahead from 4,000 samples is very good.'),
-    h('p', {}, 'Once the forecast has drifted from the true path, the reservoir keeps “dreaming” a trajectory that stays on the right attractor. It learned the system’s ', h('i', {}, 'climate'), ' as well as its weather. Press ', h('b', {}, 'Perturb'), ' to knock it off the attractor and watch it return.'),
-    h('p', {}, 'The linear model gets exactly the same data and training procedure. Its forecast falls apart almost immediately, which shows that the reservoir’s random nonlinear dynamics are what make the difference.'),
-  );
+  const explain = h('details', { class: 'explain' }, h('summary', {}, t('chaos.explain.summary')), levels(paras(t('chaos.explain.simple')), paras(t('chaos.explain.detailed'))));
 
   root.append(
     h(
       'div',
       { class: 'view-head' },
-      h('h1', {}, 'Forecasting chaos'),
-      h('p', {}, 'A random, untrained network learns to predict a chaotic system in about a third of a second, then keeps generating its attractor on its own. LSTMs and other backprop-trained networks are the usual tool for this task.'),
+      h('h1', {}, t('chaos.title')),
+      levelSwitch(),
+      levels([h('p', {}, rich(t('chaos.lead.simple'))), h('p', { class: 'try' }, h('b', {}, t('common.tryIt')), ' ', rich(t('chaos.try')))], h('p', {}, rich(t('chaos.lead.detailed')))),
     ),
     h(
       'div',
@@ -163,12 +176,12 @@ export function mount(root) {
         'div',
         { class: 'stack' },
         h('div', { class: 'stats' }, stTrain.el, stValid.el, stLinear.el, stFeat.el),
-        h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, 'Forecast vs. reality'), h('span', { class: 'sub' }, 'left of the line: training data · right: the network predicting on its own')), legendBox, h('div', { class: 'rel' }, forecastCanvas, tooltip)),
+        h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, t('chaos.cards.forecast')), h('span', { class: 'sub' }, t('chaos.cards.forecastSub'))), legendBox, h('div', { class: 'rel' }, forecastCanvas, tooltip)),
         h(
           'div',
           { class: 'grid-2' },
-          h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, 'The attractor, dreamed'), h('span', { class: 'sub' }, 'drag to rotate')), legend([['--axis', 'true attractor'], ['--s2', 'reservoir running freely']]), attractorCanvas),
-          h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, 'Inside the reservoir'), h('span', { class: 'sub' }, `${RASTER_ROWS} of the neurons, last ${RASTER_COLS} steps`)), legend([['--div-neg', 'below'], ['--div-pos', 'above the neuron’s own average']]), rasterCanvas),
+          h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, t('chaos.cards.attractor')), h('span', { class: 'sub' }, t('chaos.cards.drag'))), legend([['--axis', t('chaos.legend.trueAttractor')], ['--s2', t('chaos.legend.free')]]), attractorCanvas),
+          h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, t('chaos.cards.inside')), h('span', { class: 'sub' }, t('chaos.cards.insideSub', { rows: RASTER_ROWS, cols: RASTER_COLS }))), legend([['--div-neg', t('chaos.legend.below')], ['--div-pos', t('chaos.legend.above')]]), rasterCanvas),
         ),
         explain,
       ),
@@ -200,15 +213,22 @@ export function mount(root) {
 
   function describe() {
     const sys = SYSTEMS[S.system];
-    sysDesc.textContent = sys.description;
+    sysDesc.textContent = t(`chaos.systems.${S.system}`);
     legendBox.replaceChildren(
-      legend([['--s1', 'true trajectory'], ['--s2', 'reservoir forecast'], ...(cmp.checked ? [['--s3', 'linear model (no reservoir)', true]] : [])]),
+      legend([['--s1', t('chaos.legend.truth')], ['--s2', t('chaos.legend.forecast')], ...(cmp.checked ? [['--s3', t('chaos.legend.linear'), true]] : [])]),
     );
   }
 
   const unit = () => {
     const sys = SYSTEMS[S.system];
-    return sys.lyapunov ? { f: (steps) => steps * sys.dt * sys.lyapunov, name: 'Lyapunov times', short: 'LT' } : { f: (steps) => steps * sys.dt, name: 'time units', short: 't' };
+    const base = sys.lyapunov ? 'chaos.units.lt' : 'chaos.units.tu';
+    return {
+      f: sys.lyapunov ? (steps) => steps * sys.dt * sys.lyapunov : (steps) => steps * sys.dt,
+      short: t(sys.lyapunov ? 'chaos.units.ltShort' : 'chaos.units.tuShort'),
+      digits: sys.lyapunov ? 1 : 0,
+      // Unit words agree with the number shown (Slovak declines them).
+      name: (value, digits) => (digits > 0 ? t(`${base}.dec`) : tp(base, Math.round(value))),
+    };
   };
 
   async function train() {
@@ -224,7 +244,7 @@ export function mount(root) {
     const sys = SYSTEMS[S.system];
     const T = tl.value;
     const H = HORIZON[S.system];
-    status.textContent = 'Generating data…';
+    status.textContent = t('chaos.status.generating');
     progress.set(0);
     await new Promise((r) => setTimeout(r, 0));
     const raw = sys.generate(T + H + 20, DATA_SEED);
@@ -241,7 +261,7 @@ export function mount(root) {
       squared: sq.checked,
       lambda: lam.value,
     });
-    status.textContent = `Running ${T.toLocaleString()} steps through ${sz.value} neurons and solving for the readout…`;
+    status.textContent = t('chaos.status.running', { steps: fmtInt(T), n: fmtInt(sz.value) });
     const t0 = performance.now();
     await model.train(data, 0, T, { onProgress: (p) => progress.set(p) });
     const ms = performance.now() - t0;
@@ -257,13 +277,17 @@ export function mount(root) {
     }
 
     const u = unit();
-    stTrain.set(ms < 1000 ? `${Math.round(ms)}` : (ms / 1000).toFixed(2), ms < 1000 ? 'ms' : 's');
+    stTrain.set(ms < 1000 ? fmtInt(ms) : fmt(ms / 1000, 2), ms < 1000 ? t('common.ms') : t('common.s'));
     const valid = u.f(S.result.valid);
-    stValid.set(S.result.valid >= H ? `> ${u.f(H).toFixed(u.short === 't' ? 0 : 1)}` : valid.toFixed(u.short === 't' ? 0 : 1), u.name);
-    if (S.linResult) stLinear.set(u.f(S.linResult.valid).toFixed(u.short === 't' ? 0 : 2), u.name);
-    else stLinear.set('off');
-    stFeat.set((model.featureCount * sys.dim).toLocaleString(), `(${model.samples.toLocaleString()} samples)`);
-    status.textContent = `Trained in ${Math.round(ms)} ms on ${model.samples.toLocaleString()} samples. The forecast is being revealed below.`;
+    const shown = S.result.valid >= H ? u.f(H) : valid;
+    stValid.set(S.result.valid >= H ? `> ${fmt(shown, u.digits)}` : fmt(shown, u.digits), u.name(shown, u.digits));
+    if (S.linResult) {
+      const lin = u.f(S.linResult.valid);
+      stLinear.set(fmt(lin, u.digits ? 2 : 0), u.name(lin, u.digits ? 2 : 0));
+    }
+    else stLinear.set('–');
+    stFeat.set(fmtInt(model.featureCount * sys.dim), t('chaos.stats.samples', { n: fmtInt(model.samples) }));
+    status.textContent = t('chaos.status.trained', { ms: fmtInt(ms), samples: fmtInt(model.samples) });
     progress.set(1);
     describe();
 
@@ -354,7 +378,7 @@ export function mount(root) {
     H.sq += (y[0] * y[0] - H.sq) / 200;
     if (escaped) H.escapes++;
     if (H.n > 400 && (H.escapes > 20 || H.sq - H.mean * H.mean < 0.03)) {
-      dreamStatus.textContent = H.escapes > 20 ? 'The dream escaped the attractor, so it was restarted. Some settings and systems make fragile models.' : 'The dream collapsed to a single point, so it was restarted. Some settings and systems make fragile models.';
+      dreamStatus.textContent = H.escapes > 20 ? t('chaos.status.escaped') : t('chaos.status.collapsed');
       restartDream();
       return;
     }
@@ -415,7 +439,7 @@ export function mount(root) {
 
     for (let d = 0; d < D; d++) {
       const y0 = top + d * (ph + gap);
-      const toY = yAxis(ctx, { x: left, y: y0, w: pw, h: ph, min: -3, max: 3, ticks: [-2, 0, 2], c });
+      const toY = yAxis(ctx, { x: left, y: y0, w: pw, h: ph, min: -3, max: 3, ticks: [-2, 0, 2], format: fmtTick, c });
       ctx.fillStyle = c.text2;
       ctx.font = '600 11px system-ui, sans-serif';
       ctx.textAlign = 'left';
@@ -444,7 +468,7 @@ export function mount(root) {
     ctx.font = '11px system-ui, sans-serif';
     ctx.fillStyle = c.text2;
     ctx.textAlign = 'right';
-    ctx.fillText('training ends', nowX - 4, Hh - bottom + 14);
+    ctx.fillText(t('chaos.canvas.trainingEnds'), nowX - 4, Hh - bottom + 14);
     if (S.result.valid < S.horizon && S.revealed > S.result.valid) {
       const vx = Math.round(toX(ctxN + 1 + S.result.valid)) + 0.5;
       ctx.setLineDash([3, 3]);
@@ -456,9 +480,9 @@ export function mount(root) {
       ctx.setLineDash([]);
       ctx.textAlign = 'left';
       ctx.fillStyle = c.text;
-      const v = u.f(S.result.valid).toFixed(u.short === 't' ? 0 : 1);
-      let txt = `still accurate up to here: ${v} ${u.name}`;
-      if (ctx.measureText(txt).width > W - left - right) txt = `accurate for ${v} ${u.short}`;
+      const v = fmt(u.f(S.result.valid), u.digits);
+      let txt = t('chaos.canvas.accurate', { v, unit: u.name(u.f(S.result.valid), u.digits) });
+      if (ctx.measureText(txt).width > W - left - right) txt = t('chaos.canvas.accurateShort', { v, unit: u.short });
       const tw = ctx.measureText(txt).width;
       let tx = vx + 4 + tw > W - right ? vx - 4 - tw : vx + 4;
       tx = Math.max(left, Math.min(W - right - tw, tx));
@@ -473,7 +497,7 @@ export function mount(root) {
       const k = Math.round(v / u.f(1));
       const x = toX(ctxN + 1 + k);
       if (Math.abs(x - nowX) < 60) continue;
-      ctx.fillText(`${+v.toFixed(2)} ${u.short}`, x, Hh - 6);
+      ctx.fillText(`${fmtTick(v)} ${u.short}`, x, Hh - 6);
     }
     ctx.restore();
 
@@ -517,17 +541,17 @@ export function mount(root) {
     }
     S.hover = i;
     const D = sys.dim;
-    const t = S.train - 1 - S.context + i;
+    const ti = S.train - 1 - S.context + i;
     const k = i - S.context - 1;
     const u = unit();
     const rows = [];
     const names = D === 3 ? ['x', 'y', 'z'] : ['x'];
-    rows.push(h('div', {}, k >= 0 ? `${u.f(k + 1).toFixed(2)} ${u.name} into the forecast` : 'training data'));
+    rows.push(h('div', {}, k >= 0 ? t('chaos.tooltip.into', { v: fmt(u.f(k + 1), 2), unit: u.name(u.f(k + 1), 2) }) : t('chaos.tooltip.training')));
     for (let d = 0; d < D; d++) {
-      const parts = [`${names[d]}: true ${S.data[t * D + d].toFixed(2)}`];
+      const parts = [`${names[d]}: ${t('chaos.tooltip.true')} ${fmt(S.data[ti * D + d], 2)}`];
       if (k >= 0 && k < S.revealed) {
-        parts.push(`reservoir ${S.result.pred[k * D + d].toFixed(2)}`);
-        if (S.linResult) parts.push(`linear ${fmtNum(S.linResult.pred[k * D + d])}`);
+        parts.push(`${t('chaos.tooltip.reservoir')} ${fmt(S.result.pred[k * D + d], 2)}`);
+        if (S.linResult) parts.push(`${t('chaos.tooltip.linear')} ${fmtNum(S.linResult.pred[k * D + d])}`);
       }
       rows.push(h('div', { class: 'row' }, parts.join(' · ')));
     }
@@ -546,7 +570,7 @@ export function mount(root) {
 
   function fmtNum(v) {
     if (!Number.isFinite(v)) return '∞';
-    return Math.abs(v) > 99 ? v.toExponential(0) : v.toFixed(2);
+    return Math.abs(v) > 99 ? v.toExponential(0) : fmt(v, 2);
   }
 
   const P = [0, 0, 0];
@@ -618,9 +642,9 @@ export function mount(root) {
     ctx.fillStyle = c.muted;
     ctx.font = '11px system-ui, sans-serif';
     ctx.textAlign = 'left';
-    ctx.fillText('← older', 2, Hh - 4);
+    ctx.fillText(t('common.older'), 2, Hh - 4);
     ctx.textAlign = 'right';
-    ctx.fillText('now →', W - 2, Hh - 4);
+    ctx.fillText(t('common.now'), W - 2, Hh - 4);
   }
 
   applyPreset();

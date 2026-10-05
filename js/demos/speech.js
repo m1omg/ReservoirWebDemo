@@ -4,7 +4,9 @@ import { MelFrontend, utteranceInputs, stretch } from '../audio/features.js';
 import { Vad } from '../audio/vad.js';
 import { SequenceClassifier } from '../core/sequence-classifier.js';
 import { Rng } from '../core/rng.js';
-import { h, slider, toggle, button, stat, probBars, storage } from '../ui/dom.js';
+import { h, slider, toggle, button, stat, probBars, storage, rich, paras } from '../ui/dom.js';
+import { LANGS, t, fmt, fmtInt, fmtPct } from '../i18n.js';
+import { levelSwitch, levels } from '../ui/explain.js';
 import { Canvas2D, colors, onThemeChange, drawHeatmap } from '../ui/canvas.js';
 
 const STORE_KEY = 'rc-speech-v1';
@@ -14,12 +16,17 @@ const BANDS = 24;
 const HEAT_ROWS = 48;
 const GRID = 7;
 const COPIES = 8;
-const DEFAULT_WORDS = ['up', 'down', 'left', 'right'];
+const DEFAULTS = { sensitivity: 12, size: 300, leak: 0.25 };
+const DIRS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+// Words that steer the grid, in every language (so "up" and "hore" both work).
+const MOVES = {};
+for (const table of Object.values(LANGS)) for (const [dir, word] of Object.entries(table.speech?.moves || {})) MOVES[word.toLowerCase()] = DIRS[dir];
+for (const dir of Object.keys(DIRS)) MOVES[dir] = DIRS[dir];
 
 export function mount(root) {
   const saved = storage.get(STORE_KEY, null);
   const S = {
-    words: saved?.words?.length ? saved.words : DEFAULT_WORDS.map((name) => ({ name, examples: [] })),
+    words: saved?.words?.length ? saved.words : t('speech.defaultWords').map((name) => ({ name, examples: [] })),
     remember: !!saved,
     clf: null,
     audio: null,
@@ -38,70 +45,79 @@ export function mount(root) {
   };
 
   // ---------- DOM ----------
-  const startBtn = button('Start microphone', () => startMic(), 'primary');
-  const stopBtn = button('Stop', () => stopMic());
+  const startBtn = button(t('speech.start'), () => startMic(), 'primary');
+  const stopBtn = button(t('speech.stop'), () => stopMic());
   stopBtn.hidden = true;
   const micNote = h('p', { class: 'note', hidden: true });
   const meterLevel = h('div', { class: 'level' });
   const meterThresh = h('div', { class: 'thresh' });
-  const meter = h('div', { class: 'meter', role: 'meter', 'aria-label': 'Microphone level' }, meterLevel, meterThresh);
-  const specCanvas = h('canvas', { class: 'plot', 'aria-label': 'Live mel spectrogram of the microphone' });
-  const heatCanvas = h('canvas', { class: 'plot', 'aria-label': 'Reservoir activity for the last word' });
-  const verdict = h('div', { class: 'verdict', 'aria-live': 'polite' }, h('small', {}, 'Record a few examples of each word first.'));
+  const meter = h('div', { class: 'meter', role: 'meter', 'aria-label': t('speech.aria.meter') }, meterLevel, meterThresh);
+  const specCanvas = h('canvas', { class: 'plot', 'aria-label': t('speech.aria.spec') });
+  const heatCanvas = h('canvas', { class: 'plot', 'aria-label': t('speech.aria.heat') });
+  const verdict = h('div', { class: 'verdict', 'aria-live': 'polite' }, h('small', {}, t('speech.recordFirst')));
   const bars = probBars();
   const wordList = h('div', { class: 'class-list', style: { maxHeight: 'none' } });
   const banner = h('div', { class: 'mode-banner', hidden: true });
   const status = h('p', { class: 'hint', 'aria-live': 'polite' });
-  const gridEl = h('div', { class: 'token-grid', 'aria-label': 'Voice-controlled grid' });
-  const goalsEl = h('span', { class: 'sub' }, 'Steer the orange square onto the green cell');
+  const gridEl = h('div', { class: 'token-grid', 'aria-label': t('speech.aria.grid') });
+  const goalsEl = h('span', { class: 'sub' }, t('speech.voiceGoal'));
   for (let i = 0; i < GRID * GRID; i++) gridEl.append(h('div'));
 
-  const stAcc = stat('Self-check accuracy');
-  const stTime = stat('Training time');
-  const stN = stat('Your recordings');
+  const stAcc = stat(t('speech.stats.selfCheck'));
+  const stTime = stat(t('common.trainingTime'));
+  const stN = stat(t('speech.stats.recordings'));
 
   const sens = slider({
-    label: 'Sensitivity (dB above background)',
+    label: t('speech.sensitivity'),
     min: 6,
     max: 24,
     step: 1,
-    value: 12,
-    format: (v) => `${v} dB`,
+    value: DEFAULTS.sensitivity,
+    format: (v) => `${fmtInt(v)} dB`,
     onInput: (v) => {
       if (S.audio) S.audio.vad.sensitivityDb = v;
     },
   });
-  const sz = slider({ label: 'Neurons', min: 100, max: 600, step: 50, value: 300, onChange: () => scheduleTrain(0, true) });
-  const lk = slider({ label: 'Leak rate', min: 0.05, max: 1, step: 0.05, value: 0.25, format: (v) => v.toFixed(2), onChange: () => scheduleTrain(0, true) });
+  const sz = slider({ label: t('common.neurons'), min: 100, max: 600, step: 50, value: DEFAULTS.size, format: fmtInt, onChange: () => scheduleTrain(0, true) });
+  const lk = slider({ label: t('common.leak'), min: 0.05, max: 1, step: 0.05, value: DEFAULTS.leak, format: (v) => fmt(v, 2), onChange: () => scheduleTrain(0, true) });
   const remember = toggle({
-    label: 'Remember my recordings on this device',
-    hint: 'Stores sound features (not audio) in this browser only',
+    label: t('speech.remember'),
+    hint: t('speech.rememberHint'),
     checked: S.remember,
     onChange: (v) => {
       S.remember = v;
       persist();
     },
   });
-  const forgetBtn = button('Forget all recordings', () => {
+  const forgetBtn = button(t('speech.forget'), () => {
     for (const w of S.words) w.examples = [];
     storage.remove(STORE_KEY);
     S.clf = null;
     renderWords();
-    verdict.replaceChildren(h('small', {}, 'Record a few examples of each word first.'));
+    verdict.replaceChildren(h('small', {}, t('speech.recordFirst')));
     bars.clear();
     stAcc.set('–');
     stN.set('0');
   }, 'small danger');
-  const addWordBtn = button('+ Add word', () => {
+  const addWordBtn = button(t('speech.addWord'), () => {
     let n = S.words.length + 1;
-    while (S.words.some((w) => w.name === `word ${n}`)) n++;
-    S.words.push({ name: `word ${n}`, examples: [] });
+    while (S.words.some((w) => w.name === t('speech.newWord', { n }))) n++;
+    S.words.push({ name: t('speech.newWord', { n }), examples: [] });
     renderWords();
   }, 'small');
-  const stopRecBtn = button('Stop recording', () => {
+  const stopRecBtn = button(t('speech.stopRecording'), () => {
     S.recordingFor = null;
     updateBanner();
     renderWords();
+  }, 'small');
+  const resetNote = h('p', { class: 'hint', 'aria-live': 'polite' });
+  const resetBtn = button(t('common.reset'), () => {
+    sens.value = DEFAULTS.sensitivity;
+    if (S.audio) S.audio.vad.sensitivityDb = DEFAULTS.sensitivity;
+    sz.value = DEFAULTS.size;
+    lk.value = DEFAULTS.leak;
+    scheduleTrain(0, true);
+    resetNote.textContent = t('common.resetDone');
   }, 'small');
 
   const panel = h(
@@ -110,38 +126,39 @@ export function mount(root) {
     h(
       'div',
       { class: 'card panel' },
-      h('h2', {}, '1 · Microphone'),
+      h('h2', {}, t('speech.mic')),
       h('div', { class: 'btn-row' }, startBtn, stopBtn),
       micNote,
       meter,
       sens.el,
-      h('h2', {}, `2 · Teach it your words (${TARGET} each)`),
-      h('p', { class: 'hint' }, 'Press Record, then say the word several times with short pauses in between.'),
+      h('h2', {}, t('speech.teachTitle', { n: TARGET })),
+      h('p', { class: 'hint' }, t('speech.teachHint')),
       banner,
       wordList,
       h('div', { class: 'btn-row' }, addWordBtn, stopRecBtn),
       status,
-      h('h2', {}, '3 · Talk to it'),
-      h('p', { class: 'hint', style: { margin: '-6px 0 0' } }, 'Once every word has a few recordings, just say a word.'),
+      h('h2', {}, t('speech.talkTitle')),
+      h('p', { class: 'hint', style: { margin: '-6px 0 0' } }, t('speech.talkHint')),
     ),
-    h('div', { class: 'card panel' }, h('h2', {}, 'Reservoir'), sz.el, lk.el, remember.el, forgetBtn),
+    h('div', { class: 'card panel' }, h('h2', {}, t('common.reservoir')), sz.el, lk.el, remember.el, forgetBtn, h('div', { class: 'panel-foot' }, resetBtn, resetNote)),
   );
 
   const explain = h(
     'details',
     { class: 'explain' },
-    h('summary', {}, 'How does this work, and what happens to my voice?'),
-    h('p', {}, 'Every 10 ms the microphone signal is turned into 24 numbers that describe how much energy is in each frequency band, like the spectrogram above. A voice-activity detector cuts out each word, and the frames are fed one by one into a random reservoir of a few hundred neurons. The readout looks at the reservoir’s state at five moments during the word plus its average, and is trained with one ridge regression on your recordings. Each recording is also time-stretched into a few slightly faster and slower versions.'),
-    h('p', {}, 'Commercial keyword spotters are deep CNNs trained on tens of thousands of clips from thousands of speakers. This model has only heard you, about five times per word, so it works best in the same room, with the same mic and voice. A different person will probably confuse it. That is the trade-off: almost no data, almost no training time.'),
-    h('p', {}, h('b', {}, 'Privacy: '), 'the audio is processed inside this page and never leaves your device. No audio is stored. If you tick “remember”, only the 24-number summaries are saved, in this browser’s local storage. The microphone turns off when you leave this tab.'),
+    h('summary', {}, t('speech.explain.summary')),
+    levels(paras(t('speech.explain.simple')), paras(t('speech.explain.detailed'))),
+    ...paras(t('speech.explain.privacy')),
   );
 
+  const mv = t('speech.moves');
   root.append(
     h(
       'div',
       { class: 'view-head' },
-      h('h1', {}, 'Spoken word recognition'),
-      h('p', {}, 'Keyword spotting usually takes a CNN trained on more than 100,000 clips. This uses a random reservoir trained on about five of your own recordings per word, inside your browser.'),
+      h('h1', {}, t('speech.title')),
+      levelSwitch(),
+      levels([h('p', {}, rich(t('speech.lead.simple'))), h('p', { class: 'try' }, h('b', {}, t('common.tryIt')), ' ', rich(t('speech.try', mv)))], h('p', {}, rich(t('speech.lead.detailed')))),
     ),
     h(
       'div',
@@ -150,14 +167,14 @@ export function mount(root) {
         'div',
         { class: 'stack' },
         h('div', { class: 'stats' }, stAcc.el, stTime.el, stN.el),
-        h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, 'What the microphone hears'), h('span', { class: 'sub' }, 'last 3 seconds · low pitch at the bottom · orange bar = word detected')), specCanvas),
+        h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, t('speech.hears')), h('span', { class: 'sub' }, t('speech.hearsSub'))), specCanvas),
         h(
           'div',
           { class: 'grid-2' },
-          h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, 'It heard')), verdict, h('div', { style: { height: '8px' } }), bars.el),
-          h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, 'Voice control'), goalsEl), h('div', { style: { display: 'flex', justifyContent: 'center' } }, gridEl), h('p', { class: 'hint', style: { margin: '8px 0 0', textAlign: 'center' } }, 'Say “up”, “down”, “left” or “right”.')),
+          h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, t('speech.heard'))), verdict, h('div', { style: { height: '8px' } }), bars.el),
+          h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, t('speech.voiceControl')), goalsEl), h('div', { style: { display: 'flex', justifyContent: 'center' } }, gridEl), h('p', { class: 'hint', style: { margin: '8px 0 0', textAlign: 'center' } }, t('speech.sayWords', mv))),
         ),
-        h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, 'Reservoir response to the last word'), h('span', { class: 'sub' }, `${HEAT_ROWS} neurons × time`)), heatCanvas),
+        h('div', { class: 'card' }, h('div', { class: 'card-title' }, h('span', {}, t('speech.response')), h('span', { class: 'sub' }, t('speech.responseSub', { rows: HEAT_ROWS }))), heatCanvas),
         explain,
       ),
       panel,
@@ -182,13 +199,13 @@ export function mount(root) {
     const ok = storage.set(STORE_KEY, {
       words: S.words.map((w) => ({ name: w.name, examples: w.examples.map((e) => ({ frames: e.frames.map(round), energies: round(e.energies) })) })),
     });
-    if (!ok) status.textContent = 'Could not save to this browser’s storage (it may be full or disabled).';
+    if (!ok) status.textContent = t('speech.status.saveFailed');
   }
 
   function renderWords() {
     wordList.replaceChildren(
       ...S.words.map((w, i) => {
-        const input = h('input', { type: 'text', value: w.name, maxlength: 20, 'aria-label': `Word ${i + 1}` });
+        const input = h('input', { type: 'text', value: w.name, maxlength: 20, 'aria-label': t('speech.wordAria', { n: i + 1 }) });
         input.addEventListener('change', () => {
           const v = input.value.trim().toLowerCase();
           if (!v || S.words.some((o, j) => j !== i && o.name === v)) {
@@ -199,8 +216,8 @@ export function mount(root) {
           persist();
           scheduleTrain(0);
         });
-        const dots = h('span', { class: 'dots', 'aria-label': `${w.examples.length} recordings` }, Array.from({ length: TARGET }, (_, k) => h('i', { class: k < w.examples.length ? 'on' : '' })));
-        const rec = button(S.recordingFor === i ? 'Listening…' : w.examples.length ? 'Record more' : 'Record', () => armRecording(i), `small${S.recordingFor === i ? ' recording' : ''}`);
+        const dots = h('span', { class: 'dots', 'aria-label': t('speech.recordingsAria', { n: w.examples.length }) }, Array.from({ length: TARGET }, (_, k) => h('i', { class: k < w.examples.length ? 'on' : '' })));
+        const rec = button(S.recordingFor === i ? t('speech.listening') : w.examples.length ? t('speech.recordMore') : t('speech.record'), () => armRecording(i), `small${S.recordingFor === i ? ' recording' : ''}`);
         const del = button('×', () => {
           if (S.words.length <= 2) return;
           S.words.splice(i, 1);
@@ -209,17 +226,17 @@ export function mount(root) {
           renderWords();
           scheduleTrain(0);
         }, 'small danger');
-        del.setAttribute('aria-label', `Remove ${w.name}`);
+        del.setAttribute('aria-label', t('speech.removeAria', { name: w.name }));
         return h('div', { class: 'word-row' }, h('div', {}, input, h('div', { style: { marginTop: '4px' } }, dots, w.examples.length > TARGET ? h('small', { class: 'meta' }, ` +${w.examples.length - TARGET}`) : null)), rec, del);
       }),
     );
     const total = S.words.reduce((a, w) => a + w.examples.length, 0);
-    stN.set(String(total), `of ${S.words.length * TARGET} suggested`);
+    stN.set(fmtInt(total), t('speech.stats.suggested', { n: fmtInt(S.words.length * TARGET) }));
   }
 
   function armRecording(i) {
     if (!S.audio) {
-      status.textContent = 'Start the microphone first.';
+      status.textContent = t('speech.status.startFirst');
       return;
     }
     S.recordingFor = S.recordingFor === i ? null : i;
@@ -232,7 +249,7 @@ export function mount(root) {
     banner.hidden = i === null;
     if (i === null) return;
     const w = S.words[i];
-    banner.textContent = `Say “${w.name}” (${Math.min(w.examples.length + 1, TARGET)} of ${TARGET})…`;
+    banner.textContent = t('speech.banner', { name: w.name, k: Math.min(w.examples.length + 1, TARGET), n: TARGET });
   }
 
   // ---------- Training ----------
@@ -271,7 +288,7 @@ export function mount(root) {
     clf.train(examples, names);
     const ms = performance.now() - t0;
     S.clf = clf;
-    stTime.set(`${Math.round(ms)}`, 'ms');
+    stTime.set(fmtInt(ms), t('common.ms'));
 
     // Self-check: leave each recording (and its stretched copies) out,
     // retrain without it, and see if it's still recognised.
@@ -280,8 +297,8 @@ export function mount(root) {
     if (words.filter((w) => w.examples.length >= 2).length >= 2) {
       ({ ok, n } = clf.leaveOneOut(examples, names, (ex) => ex.src, (ex) => ex.original));
     }
-    if (n) stAcc.set(`${Math.round((ok / n) * 100)}%`, `of ${n}, each left out`);
-    status.textContent = `Readout trained on ${examples.length} examples (${words.reduce((a, w) => a + w.examples.length, 0)} recordings plus stretched copies) in ${Math.round(ms)} ms.`;
+    if (n) stAcc.set(fmtPct(ok / n, 0), t('speech.stats.leftOut', { n }));
+    status.textContent = t('speech.status.trained', { n: fmtInt(examples.length), r: fmtInt(words.reduce((a, w) => a + w.examples.length, 0)), ms: fmtInt(ms) });
   }
 
   // ---------- Audio ----------
@@ -289,11 +306,11 @@ export function mount(root) {
   async function startMic() {
     micNote.hidden = true;
     if (!window.isSecureContext) {
-      showNote('The microphone only works on a secure page: https:// or http://localhost. Open the hosted version, or run ./run.sh and use the localhost link.');
+      showNote(t('speech.errors.insecure'));
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia || typeof AudioWorkletNode === 'undefined') {
-      showNote('This browser lacks the audio features this demo needs (getUserMedia and AudioWorklet). Try a current Firefox, Chrome, Edge or Safari.');
+      showNote(t('speech.errors.unsupported'));
       return;
     }
     startBtn.disabled = true;
@@ -315,11 +332,11 @@ export function mount(root) {
       S.audio = { stream, ctx, node, fe, vad };
       startBtn.hidden = true;
       stopBtn.hidden = false;
-      status.textContent = `Microphone on (${Math.round(ctx.sampleRate / 1000)} kHz). Speak normally; the background level adapts automatically.`;
+      status.textContent = t('speech.status.on', { khz: fmtInt(ctx.sampleRate / 1000) });
       renderLoop();
     } catch (err) {
       console.warn(err);
-      showNote(err?.name === 'NotAllowedError' ? 'Microphone permission was denied. Allow it in the address bar and try again.' : `Could not start the microphone: ${err?.message || err}`);
+      showNote(err?.name === 'NotAllowedError' ? t('speech.errors.denied') : t('speech.errors.failed', { error: err?.message || err }));
     } finally {
       startBtn.disabled = false;
     }
@@ -329,7 +346,7 @@ export function mount(root) {
     const a = S.audio;
     if (!a) return;
     a.node.port.onmessage = null;
-    for (const t of a.stream.getTracks()) t.stop();
+    for (const track of a.stream.getTracks()) track.stop();
     a.ctx.close().catch(() => {});
     S.audio = null;
     S.recordingFor = null;
@@ -337,7 +354,7 @@ export function mount(root) {
     stopBtn.hidden = true;
     updateBanner();
     renderWords();
-    status.textContent = 'Microphone off.';
+    status.textContent = t('speech.status.off');
   }
 
   function showNote(text) {
@@ -367,11 +384,11 @@ export function mount(root) {
       renderWords();
       persist();
       scheduleTrain(250);
-      flashVerdict(`Got it: “${w.name}” #${w.examples.length}`);
+      flashVerdict(t('speech.got', { name: w.name, n: w.examples.length }));
       return;
     }
     if (!S.clf) {
-      flashVerdict(ready() ? 'Training…' : 'Record some examples first');
+      flashVerdict(ready() ? t('speech.trainingNow') : t('speech.recordSome'));
       return;
     }
     const record = [];
@@ -380,7 +397,7 @@ export function mount(root) {
     drawHeat();
     bars.update(S.clf.classes, p.probs);
     if (p.confidence < 0.55) {
-      verdict.replaceChildren(h('span', {}, p.label, ' ', h('small', {}, '(not sure)')));
+      verdict.replaceChildren(h('span', {}, p.label, ' ', h('small', {}, t('speech.notSure'))));
       return;
     }
     verdict.replaceChildren(p.label);
@@ -392,13 +409,12 @@ export function mount(root) {
   }
 
   function act(word) {
-    const moves = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
-    const m = moves[word];
+    const m = MOVES[String(word).toLowerCase()];
     if (!m) return;
     S.token = [Math.max(0, Math.min(GRID - 1, S.token[0] + m[0])), Math.max(0, Math.min(GRID - 1, S.token[1] + m[1]))];
     if (S.token[0] === S.goal[0] && S.token[1] === S.goal[1]) {
       S.goals++;
-      goalsEl.textContent = `Goals reached: ${S.goals}`;
+      goalsEl.textContent = t('speech.goals', { n: S.goals });
       do S.goal = [S.rng.int(GRID), S.rng.int(GRID)];
       while (S.goal[0] === S.token[0] && S.goal[1] === S.token[1]);
     }
@@ -463,7 +479,7 @@ export function mount(root) {
       ctx.fillStyle = c.muted;
       ctx.font = '13px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('Say a word once the model is trained', W / 2, H / 2);
+      ctx.fillText(t('speech.sayOnce'), W / 2, H / 2);
       return;
     }
     const N = rec[0].length;
